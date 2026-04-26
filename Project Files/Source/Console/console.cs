@@ -19900,47 +19900,57 @@ namespace Thetis
 
                 rx1_preamp_by_band[(int)rx1_band] = rx1_preamp_mode;
 
-                _from_preampmode[0] = true;
-                switch (rx1_preamp_mode)
+                // SunSDR2 DX owns its combo state via comboPreamp_SelectedIndexChanged
+                // which early-returns after pushing opcode 0x05 and never updates
+                // rx1_preamp_mode. Letting the generic switch below run would set
+                // comboPreamp.Text from a stale enum value, wiping the user's
+                // selection every time this setter fires (MOX exit, band change,
+                // model change). Gate it for SunSDR. User-confirmed working
+                // 2026-04-24: "-20dB" selection survives TX/TUNE cycles.
+                if (HardwareSpecific.Model != HPSDRModel.SUNSDR2DX)
                 {
-                    case PreampMode.HPSDR_ON:
-                        comboPreamp.Text = "0dB";
-                        break;
+                    _from_preampmode[0] = true;
+                    switch (rx1_preamp_mode)
+                    {
+                        case PreampMode.HPSDR_ON:
+                            comboPreamp.Text = "0dB";
+                            break;
 
-                    case PreampMode.HPSDR_OFF:
-                        comboPreamp.Text = "-20dB";
-                        break;
+                        case PreampMode.HPSDR_OFF:
+                            comboPreamp.Text = "-20dB";
+                            break;
 
-                    case PreampMode.HPSDR_MINUS10:
-                        comboPreamp.Text = "-10db";
-                        break;
+                        case PreampMode.HPSDR_MINUS10:
+                            comboPreamp.Text = "-10db";
+                            break;
 
-                    case PreampMode.HPSDR_MINUS20:
-                        comboPreamp.Text = "-20db";
-                        break;
+                        case PreampMode.HPSDR_MINUS20:
+                            comboPreamp.Text = "-20db";
+                            break;
 
-                    case PreampMode.HPSDR_MINUS30:
-                        comboPreamp.Text = "-30db";
-                        break;
+                        case PreampMode.HPSDR_MINUS30:
+                            comboPreamp.Text = "-30db";
+                            break;
 
-                    case PreampMode.HPSDR_MINUS40:
-                        comboPreamp.Text = "-40db"; //MW0LGE_22b lower
-                        break;
+                        case PreampMode.HPSDR_MINUS40:
+                            comboPreamp.Text = "-40db"; //MW0LGE_22b lower
+                            break;
 
-                    case PreampMode.HPSDR_MINUS50:
-                        comboPreamp.Text = "-50db"; //MW0LGE_22b lower
-                        break;
-                    case PreampMode.SA_MINUS10:
-                        comboPreamp.Text = "-10dB";
-                        break;
-                    case PreampMode.SA_MINUS20:
-                        comboPreamp.Text = "-20dB";
-                        break;
-                    case PreampMode.SA_MINUS30:
-                        comboPreamp.Text = "-30dB";
-                        break;
+                        case PreampMode.HPSDR_MINUS50:
+                            comboPreamp.Text = "-50db"; //MW0LGE_22b lower
+                            break;
+                        case PreampMode.SA_MINUS10:
+                            comboPreamp.Text = "-10dB";
+                            break;
+                        case PreampMode.SA_MINUS20:
+                            comboPreamp.Text = "-20dB";
+                            break;
+                        case PreampMode.SA_MINUS30:
+                            comboPreamp.Text = "-30dB";
+                            break;
+                    }
+                    _from_preampmode[0] = false;
                 }
-                _from_preampmode[0] = false;
 
                 if (!_mox && !_setFromOtherAttenuator)
                 {
@@ -28868,7 +28878,21 @@ namespace Thetis
                 {
                     //[2.10.3.12]MW0LGE added incase anything needs to close down instantly irrespective of console closing
                     //PSform is an example of this, as the timer1/2 threads get blocked on UI calls as the main UI thread is busy closing down
-                    await run_console_closing_handlers_async();
+                    //
+                    // Bound the wait with a 3s timeout so a hung subscriber
+                    // (seen 2026-04-24: close stuck on "Please wait" dialog
+                    // forever because the await here never returned). The
+                    // only subscriber is PSForm's onConsoleClosingAsync which
+                    // does await Task.Delay(100), so 3s is enormous headroom.
+                    // If it times out we log and call Close() anyway — better
+                    // a slightly messy close than a stuck app.
+                    var handlersTask = run_console_closing_handlers_async();
+                    var timeoutTask = Task.Delay(3000);
+                    var winner = await Task.WhenAny(handlersTask, timeoutTask);
+                    if (winner == timeoutTask)
+                    {
+                        shutdownLogStringToPath("Console_Closing: handlers TIMED OUT after 3s — continuing close anyway");
+                    }
 
                     //then try again to close the console
                     Close();

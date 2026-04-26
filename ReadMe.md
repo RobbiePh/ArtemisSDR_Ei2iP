@@ -2,9 +2,22 @@
 
 *Open source. Native protocol. Dedicated to Artemis II.*
 
-**Current version: v2.0.9**
+**Current version: v2.0.10**
 
 ⬇️ [**Download Latest Release**](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  📘 [**Quick Start Guide**](START_HERE_SUNSDR2DX.md)  ·  📝 [What's new](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  💬 [Discussions](https://github.com/kk68/ArtemisSDR/discussions)  ·  🐛 [Issues](https://github.com/kk68/ArtemisSDR/issues)
+
+### What's new in v2.0.10
+
+- **ATT / Preamp setting now persists across TX and TUNE cycles** on the SunSDR2 DX. Prior versions wiped the user's selection back to the band default whenever the radio left transmit; the dropdown now keeps your `-20dB` (or whatever you set) through MOX, TUNE, and band changes.
+- **Crash-on-startup after settings-database corruption is recovered automatically.** Atomic writes plus a startup backup mean a previous unclean exit no longer leaves a partial `Artemis.mdb` that prevents the app from launching.
+- **App close no longer hangs** on a stuck "Please wait" dialog. Shutdown handlers are now bounded by a 3-second timeout; if a subscriber wedges, the app continues closing cleanly instead of blocking forever.
+
+### Known issues — please read before filing a bug
+
+- **Robotic / garbled audio occasionally on cold start.** Power-cycle ArtemisSDR (Power off → Power on, or close + reopen) to clear it. Investigation underway.
+- **Rare crash on application exit after several band changes** (Windows reports `0xc0000374` heap corruption). The crash is during teardown — your settings, memories, and recordings are safe. No data loss.
+- **MUT button on the front panel does not mute.** Long-standing inherited bug from upstream Thetis; predates ArtemisSDR. Use VAC mute or your audio device's mute as a workaround.
+- **PS-A / 2-TONE / DUP** are grayed out — see the limitations table below; this is a hardware-architecture constraint of the SunSDR2 DX, not a bug.
 
 ![ArtemisSDR running on 40m — panadapter + waterfall, SunSDR2 DX native protocol](docs/screenshot-main.png)
 
@@ -100,6 +113,9 @@ Honest list of what's partially done or missing. None of these prevent normal op
 | **Diversity mode** | Unsupported. RX2 follows RX1's antenna selection; no independent per-receiver antenna path has been found. |
 | **MON / DUP audio routing** | Not fully settled during TX. If you need to monitor your own transmission, a second receiver is the reliable path. |
 | **Occasional post-TX raspy audio** | Intermittent; cycling VAC clears it. Tracked as a polish item. |
+| **Robotic / garbled audio on cold start** | Intermittent; Power-cycle (Power off → Power on) clears it. Under investigation. |
+| **Rare crash on app exit after band changes** | Heap corruption surfaces during teardown (`0xc0000374`). No data loss — settings, memories, and recordings are flushed atomically before exit. Under investigation. |
+| **MUT button on the front panel** | Does not mute. Long-standing inherited bug from upstream Thetis; predates ArtemisSDR. Use VAC mute or the audio device mute. |
 
 ## Privacy & network activity
 
