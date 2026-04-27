@@ -1344,34 +1344,33 @@ namespace Thetis
             }
         }
 
+        // SetOutCount* — compute OutCount* = block_size_in * out_rate / sample_rate_in.
+        // Using a single long-arithmetic multiply-then-divide preserves exactness
+        // for non-integer-ratio rates (SunSDR2 DX 312500 input / 48000 output:
+        // 625 * 48000 / 312500 = 96, matching the actual rcvr.ch_outsize set by
+        // SetXcmInrate). The legacy split (multiply if up-rate, integer-divide if
+        // down-rate) lost the fractional ratio for non-integer cases — produced
+        // OutCount=104 for SunSDR while ch_outsize was 96 → 8-sample over-read
+        // every block in cmaster.cs::wscope (and any other consumer that reads
+        // Audio.OutCount as the deswizzle size). For Anan/HL2 integer ratios the
+        // long form gives the same answer as the legacy form.
         private static void SetOutCount()
         {
-            if (out_rate >= sample_rate1)
-                OutCount = block_size1 * (out_rate / sample_rate1);
-            else
-                OutCount = block_size1 / (sample_rate1 / out_rate);
+            if (sample_rate1 > 0)
+                OutCount = (int)((long)block_size1 * out_rate / sample_rate1);
         }
 
         private static void SetOutCountRX2()
         {
-            if (out_rate_rx2 >= sample_rate_rx2)
-                OutCountRX2 = block_size_rx2 * (out_rate_rx2 / sample_rate_rx2);
-            else
-                OutCountRX2 = block_size_rx2 / (sample_rate_rx2 / out_rate_rx2);
+            if (sample_rate_rx2 > 0)
+                OutCountRX2 = (int)((long)block_size_rx2 * out_rate_rx2 / sample_rate_rx2);
         }
 
         private static void SetOutCountTX()
         {
-            //if (out_rate_tx >= sample_rate_tx)
-            //    OutCountTX = block_size1 * (out_rate_tx / sample_rate_tx);
-            //else
-            //    OutCountTX = block_size1 / (sample_rate_tx / out_rate_tx);
-
             //[2.10.3.4]MW0LGE changed to use tx block size
-            if (out_rate_tx >= sample_rate_tx)
-                OutCountTX = block_size_tx * (out_rate_tx / sample_rate_tx);
-            else
-                OutCountTX = block_size_tx / (sample_rate_tx / out_rate_tx);
+            if (sample_rate_tx > 0)
+                OutCountTX = (int)((long)block_size_tx * out_rate_tx / sample_rate_tx);
         }
 
         private static int out_count = 1024;

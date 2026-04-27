@@ -108,6 +108,9 @@ namespace Thetis
         [DllImport("ChannelMaster.dll", EntryPoint = "getChannelOutputRate", CallingConvention = CallingConvention.Cdecl)]
         public static extern int GetChannelOutputRate(int stype, int id);
 
+        [DllImport("ChannelMaster.dll", EntryPoint = "getChannelOutputSize", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int GetChannelOutputSize(int stype, int id);
+
         [DllImport("ChannelMaster.dll", EntryPoint = "getCMAstate", CallingConvention = CallingConvention.Cdecl)]
         public static extern int GetCMAstate();
 
@@ -2187,8 +2190,15 @@ namespace Thetis
                             {
                                 if ((state == 0) && !rxpre) // getting receive data and want receive data for 'post' position
                                 {
+                                    // Use the ACTUAL ch_outsize the ChannelMaster pipeline sized this
+                                    // block for, NOT GetBuffSize(rcvr_outrate). For non-integer-ratio
+                                    // input rates (SunSDR2 DX 312500 / 48000) SetXcmInrate recomputes
+                                    // ch_outsize to 96 while GetBuffSize(48000) returns the naive 64
+                                    // — mismatch dropped 32 samples per block in the recorded WAV,
+                                    // producing chipmunk / robotic playback while speaker output
+                                    // (which uses ch_outsize directly via AAMix) sounded clean.
                                     int rcvr_outrate = cmaster.GetChannelOutputRate(0, id);
-                                    int rcvr_outsize = cmaster.GetBuffSize(rcvr_outrate);
+                                    int rcvr_outsize = cmaster.GetChannelOutputSize(0, id);
                                     deswizzle(rcvr_outsize, data, pleft, pright);
                                     if (WaveThing.wave_file_writer[id].BaseRate != rcvr_outrate)
                                     {
@@ -2203,7 +2213,7 @@ namespace Thetis
                                 if ((state == 1) && !txpre) // getting transmit data and want transmit data for 'post' position
                                 {
                                     int xmtr_outrate = cmaster.GetChannelOutputRate(1, 0);
-                                    int xmtr_outsize = cmaster.GetBuffSize(xmtr_outrate);
+                                    int xmtr_outsize = cmaster.GetChannelOutputSize(1, 0);
                                     deswizzle(xmtr_outsize, data, pleft, pright);
                                     if (WaveThing.wave_file_writer[id].BaseRate != xmtr_outrate)
                                     {

@@ -50,6 +50,7 @@ struct _ch
 	double tslewdown;
 	int bfo;					// 'block_for_output', block fexchange until output is available
 	volatile long flushflag;
+	HANDLE h_wdsp_thread;		// real handle (from _beginthreadex) so pre_main_destroy can WaitForSingleObject before tearing down DSP buffers; NULL when thread not running
 	struct	//io buffers
 	{
 		IOB pc, pd, pe, pf;		// copies for console calls, dsp, exchange, and flush thread

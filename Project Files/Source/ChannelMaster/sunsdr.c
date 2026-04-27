@@ -51,7 +51,9 @@ extern __declspec(dllimport) void FlushChannelNow (int channel);
 /* Forward declarations — the iq_dump and tx_pace helpers defined
  * immediately below need these, but they're defined much later in
  * this file. */
-static void sdr_logf(const char* fmt, ...);
+/* Made non-static so cmaster.c can also log into sunsdr_debug.log
+ * for instrumenting the rate-cascade and audio sizing path. */
+void sdr_logf(const char* fmt, ...);
 static void sunsdr_build_tx_packet(unsigned char* buf, unsigned int seq, const double* iq);
 static void sunsdr_send_tx_packet(const double* iq);
 static struct sockaddr_in sunsdr_stream_dest(void);
@@ -844,7 +846,7 @@ static void sdr_log_async_stop(void) {
 #endif
 }
 
-static void sdr_logf(const char* fmt, ...) {
+void sdr_logf(const char* fmt, ...) {
 #if !SUNSDR_DEBUG_LOG_ENABLED
     (void)fmt;
     return;
@@ -2334,6 +2336,17 @@ static const struct {
     {"32ff5f000600000000000100000000000000000000000000", 24, 10000},
     {"32ff1d00040000000000010000000000000000000000", 22, 50000},
     {"32ff1b00040000000000010000000000000000000000", 22, 300},
+    /* Op 0x05 (preamp/atten state). Wire byte at offset 18:
+     *   0x80 = -20 dB ATT, 0x81 = -10 dB ATT,
+     *   0x82 = 0 dB (bypass), 0x83 = +10 dB preamp.
+     * Boot at 0x83 (+10 dB) — matches the captured EESDR3 startup
+     * sequence and matches what the combo defaults to when no
+     * specific value is in saved settings. Briefly tried 0x82
+     * (0 dB) so weak-signal users wouldn't get +10 boost on cold
+     * start, but that turned out to drop apparent audio level so
+     * far that users heard "no audio" on a quiet band. Reverted
+     * — user can pick ATT in the combo and the persistence fix
+     * keeps it across MOX/band changes. */
     {"32ff0500040000000000010000000000000083000000", 22, 100},
     {"32ff1800040000000000010000000000000000000000", 22, 100},
     {"32ff19000400000000000100000000000000ff000000", 22, 200},
@@ -2884,6 +2897,17 @@ void SunSDRPowerOff(void)
     sdr_logf("SunSDRPowerOff() called\n");
     printf("SunSDR: powering off...\n");
 
+    /* Send 0x02 FIRST while the IQ stream is still flowing. EESDR-Off
+     * capture (20260426_202823) shows EESDR's last 0xFE IQ packet
+     * lands 1.4 ms before its 0x02 send and the radio acks 200 us
+     * later; the radio expects 0x02 to arrive on top of an active
+     * client and handles teardown internally. Our previous order
+     * (stop threads -> 0-5 s of wire silence -> 0x02) tripped the
+     * radio's client-timeout path BEFORE the 0x02, leaving it in a
+     * half-torn-down state that polluted the next Power-On. */
+    sunsdr_send_u32_cmd(SUNSDR_OP_POWER_OFF, 0);
+
+    /* Now tear down our side. */
     sdr.keepRunning = 0;
     sdr.powered = 0;
     sdr.currentPTT = 0;
@@ -2915,9 +2939,6 @@ void SunSDRPowerOff(void)
         sdr_logf("Stopping ASIO\n");
         cm_asioStop();
     }
-
-    /* Send power-off command (opcode 0x02) */
-    sunsdr_send_u32_cmd(SUNSDR_OP_POWER_OFF, 0);
 
     printf("SunSDR: powered off\n");
 }
@@ -4204,6 +4225,10 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
              * the WDSP RX channel (see SunSDRSetRxWdspReady). */
             if (InterlockedAnd(&sdr.rxWdspReady, 0xffffffff)) {
                 __try {
+                    if (dbg_xrouter_real_feeds == 0) {
+                        sdr_logf("[XROUTER FIRST DISPATCH] gate just opened, dispatching first %d samples to xrouter (source=%d)\n",
+                            SUNSDR_IQ_COMPLEX_PER_PKT, source);
+                    }
                     xrouter(NULL, 0, source, SUNSDR_IQ_COMPLEX_PER_PKT, sdr.rxBuf);
                     if (source == 0) {
                         last_rx_pkt_tick = GetTickCount64();

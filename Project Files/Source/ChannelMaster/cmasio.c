@@ -40,6 +40,10 @@ bryanr@bometals.com
 #include "cmcomm.h"
 #include "obbuffs.h"
 
+/* Defined in sunsdr.c — used here for instrumenting the rate-cascade
+ * vs ASIO blocksize relationship. */
+extern void sdr_logf(const char* fmt, ...);
+
 cmasio cma = { 0 };
 CMASIO pcma = &cma;
 int cmaError = 0;
@@ -91,6 +95,10 @@ void create_cmasio()
 		pcma->rmatchOUT = create_rmatchV(pcma->blocksize, pcma->blocksize, samplerate, samplerate, blockNum * pcma->blocksize, 1);
 		forceRMatchVar(pcma->rmatchIN, 1, 1);
 		forceRMatchVar(pcma->rmatchOUT, 1, 1);
+		sdr_logf("[CMASIO INIT] blocksize=%d samplerate=%d blockNum=%ld lockMode=%d  rmatch in/out_size=%d in/out_rate=%d  audio_outsize=%d ch_outsize[0]=%d\n",
+			pcma->blocksize, samplerate, blockNum, pcma->lockMode,
+			pcma->blocksize, samplerate,
+			pcm->audio_outsize, pcm->cmRCVR > 0 ? pcm->rcvr[0].ch_outsize : -1);
 
 		pcma->bufferFull = CreateSemaphore(NULL, 0, 1, NULL);
 		pcma->bufferEmpty = CreateSemaphore(NULL, 1, 1, NULL);

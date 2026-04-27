@@ -27901,6 +27901,37 @@ namespace Thetis
                 txtVFOAMSD.ForeColor = vfo_text_light_color;
                 txtVFOALSD.ForeColor = small_vfo_color;
 
+                powerOnLog("=== Power-On START ===");
+                powerOnLog($"Model={HardwareSpecific.Model} Protocol={NetworkIO.CurrentRadioProtocol} VAC1={vac_enabled} VAC2={vac2_enabled}");
+                powerOnLog($"BEFORE rate cascade: SampleRateRX1={sample_rate_rx1} BlockSize1={block_size1} Audio.SampleRate1={Audio.SampleRate1} Audio.BlockSize={Audio.BlockSize}");
+
+                // SunSDR rate cascade — MUST run before Audio.Start because
+                // setup.cs comboAudioSampleRate1_SelectedIndexChanged has no
+                // RadioProtocol.SUNSDR case, so the C# pipeline view of the
+                // rate (Audio.SampleRate1 → cmaster.SetXcmInrate, BlockSize1,
+                // specRX, RadioDSP) never updates from the 192000 default to
+                // the radio's actual 312500. Without this cascade the rmatch
+                // resampler computes a 48000/192000 ratio while samples
+                // actually arrive at 312500 → pitch-shifted/"robotic" audio.
+                if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
+                {
+                    int sunsdr_rate = 312500;
+                    int sunsdr_bs   = cmaster.GetBuffSize(sunsdr_rate);
+                    powerOnLog($"Rate cascade for SUNSDR: rate={sunsdr_rate} bs={sunsdr_bs}");
+                    SampleRateRX1   = sunsdr_rate;
+                    BlockSize1      = sunsdr_bs;
+                    SampleRateRX2   = sunsdr_rate;
+                    BlockSizeRX2    = sunsdr_bs;
+                    if (specRX != null)
+                    {
+                        specRX.GetSpecRX(0).SampleRate = sunsdr_rate;
+                        specRX.GetSpecRX(0).BlockSize  = sunsdr_bs;
+                        specRX.GetSpecRX(1).SampleRate = sunsdr_rate;
+                        specRX.GetSpecRX(1).BlockSize  = sunsdr_bs;
+                    }
+                    powerOnLog($"AFTER rate cascade: SampleRateRX1={sample_rate_rx1} BlockSize1={block_size1} Audio.SampleRate1={Audio.SampleRate1} Audio.BlockSize={Audio.BlockSize} GetChannelOutputSize(0,0)={cmaster.GetChannelOutputSize(0,0)} GetInputRate(0,0)={cmaster.GetInputRate(0,0)}");
+                }
+
                 UpdateDDCs(rx2_enabled);
                 UpdateVFOASub();
 
@@ -27923,10 +27954,29 @@ namespace Thetis
 
                 Audio.CurrentAudioState1 = Audio.AudioState.DTTSP;
 
-                if (vac_enabled) VACEnabled = true;  //Don't trigger StopAudioIVAC if the VACs aren't needed now
-                if (vac2_enabled) VAC2Enabled = true;
+                // VAC enable is normally done here so the VAC MME/WASAPI
+                // callbacks are running by the time Audio.Start primes the
+                // pipeline. For SUNSDR we DEFER this to after the IQ gate
+                // opens — otherwise VAC's output ring sits empty for ~150-
+                // 300 ms while the pipeline comes up, producing the
+                // underflow burst the user sees in VAC1 Monitor on Power-On.
+                bool deferVacForSunsdr = (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX);
+                if (!deferVacForSunsdr)
+                {
+                    if (vac_enabled) VACEnabled = true;  //Don't trigger StopAudioIVAC if the VACs aren't needed now
+                    if (vac2_enabled) VAC2Enabled = true;
+                }
 
-                Thread.Sleep(100); // wait for hardware to settle before starting audio (possible sample rate change)
+                // The 100ms hardware-settle sleep below was added for
+                // ETH/USB rate-change races. For SUNSDR the rate cascade
+                // ran at the top of this method (already settled), and
+                // we don't need to wait here — every ms of dead time on
+                // the wire is another packet the radio queues into our
+                // recv buffer that has to drain before the gate opens.
+                if (!deferVacForSunsdr)
+                {
+                    Thread.Sleep(100); // wait for hardware to settle before starting audio (possible sample rate change)
+                }
                 psform.ForcePS();
 
                 if (m_bATTonTX)
@@ -27944,6 +27994,7 @@ namespace Thetis
                 enableAudioAmplfier(); // MW0LGE_22b
 
                 if (!IsSetupFormNull) SetupForm.BoardWarning = ""; // no board warning
+                powerOnLog("Calling Audio.Start() ...");
                 if (!Audio.Start())   // starts JanusAudio running
                 {
                     chkPower.Checked = false;
@@ -28115,9 +28166,68 @@ namespace Thetis
                 UpdateDDCs(rx2_enabled);
                 UpdateAAudioMixerStates();
 
+                // SUNSDR-only: BEFORE arming the WDSP RX channel, force
+                // every active noise reducer (NR1/2/3/4) OFF and remember
+                // the user's intended run-state so we can restore it after
+                // the audio pipeline has stabilised. Why: EMNR / RNNoise
+                // build their noise models from the FIRST samples they
+                // process. WDSP.SetChannelState below arms the channel
+                // and within ~10-50 ms the first sample arrives. Those
+                // first samples are filter-ringing / DC-settling /
+                // resampler ramp-up — feeding them into EMNR latches a
+                // poisoned noise floor that over-suppresses real signal
+                // for the rest of the session ("robotic" audio on
+                // Power-On with NR2 enabled). Toggling NR_run off/on
+                // afterwards does NOT reset the noise model
+                // (SetRXAEMNRRun only flips a flag; flush_emnr only
+                // clears the FFT pipeline buffers, not the NPE state).
+                // The only reliable trick is to keep run=0 during the
+                // unstable startup window so xemnr() never even sees
+                // those first samples — its NPE state stays at
+                // calc_emnr's malloc0 zeroes — then turn run=1 once
+                // samples are clean.
+                int[,] savedNR = new int[2, 2]; // [rx,sub] x 4 NR types packed: bit 0=NR1, 1=NR2, 2=NR3, 3=NR4
+                bool nrDeferActive = (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX);
+                if (nrDeferActive)
+                {
+                    for (int rxIdx = 0; rxIdx < 2; rxIdx++)
+                    {
+                        for (int sub = 0; sub < 2; sub++)
+                        {
+                            var dsp = radio.GetDSPRX(rxIdx, sub);
+                            if (dsp == null) continue;
+                            int packed = 0;
+                            // Read pre-defer state (cache, set Force=true so the
+                            // setter ALWAYS re-pushes to WDSP regardless of cache
+                            // vs. dsp-cache state — defends against the silent
+                            // no-op path in the property setter).
+                            int nr1 = dsp.RXANR1Run;
+                            int nr2 = dsp.RXANR2Run;
+                            int nr3 = dsp.RXANR3Run;
+                            int nr4 = dsp.RXANR4Run;
+                            if (nr1 == 1) packed |= 1;
+                            if (nr2 == 1) packed |= 2;
+                            if (nr3 == 1) packed |= 4;
+                            if (nr4 == 1) packed |= 8;
+
+                            dsp.Force = true;
+                            dsp.RXANR1Run = 0;
+                            dsp.RXANR2Run = 0;
+                            dsp.RXANR3Run = 0;
+                            dsp.RXANR4Run = 0;
+                            dsp.Force = false;
+
+                            savedNR[rxIdx, sub] = packed;
+                            powerOnLog($"NR-DEFER: rx={rxIdx} sub={sub} captured=0x{packed:X} forced all NR off");
+                        }
+                    }
+                }
+
+                powerOnLog("Audio.Start() returned, all setup threads spawned, about to arm WDSP RX channel(s)");
                 WDSP.SetChannelState(WDSP.id(0, 0), 1, 1);
                 if (radio.GetDSPRX(0, 1).Active) WDSP.SetChannelState(WDSP.id(0, 1), 1, 1);
                 if (radio.GetDSPRX(1, 0).Active) WDSP.SetChannelState(WDSP.id(2, 0), 1, 1);
+                powerOnLog("WDSP.SetChannelState ON for active RX channels");
 
                 // WDSP RX channel is now armed — open the SunSDR read
                 // thread's xrouter-dispatch gate so buffered radio IQ
@@ -28128,7 +28238,87 @@ namespace Thetis
                 // overhead; see sunsdr.c SunSDRSetRxWdspReady).
                 if (NetworkIO.CurrentRadioProtocol == RadioProtocol.SUNSDR)
                 {
+                    // Settle barrier: SetChannelState above kicks off
+                    // FIRcore FFT-plan creation, AGC slew tables, EMNR
+                    // window calc, etc. Some of those finish their
+                    // first-time init asynchronously inside WDSP. If
+                    // we open the gate immediately, the very first
+                    // sample can land mid-init and lock the rmatch /
+                    // bp filter rings into a partially-initialized
+                    // state for the lifetime of the session
+                    // (intermittent "robotic" audio on Power-On).
+                    // Bumped 50 → 300 ms after observing the race
+                    // still hits with NR fully disabled — wider
+                    // margin against slow-init runs.
+                    Thread.Sleep(300);
+                    // Force-flush every active RX channel right before
+                    // we open the gate. WDSP.FlushChannelNow zeroes the
+                    // io ring buffers, sets exec_bypass briefly, runs
+                    // flush_main (which clears filter state, slews,
+                    // overlap-save buffers throughout the chain) and
+                    // returns. Without this, residual junk from create_*
+                    // (e.g. one-shot impulse responses, stale pixel
+                    // accumulators) can be the FIRST samples that flow
+                    // into the rmatch resampler ring on cold-start —
+                    // and rmatch latches on those for the lifetime of
+                    // the session, producing the intermittent
+                    // robotic-without-NR audio reported across runs.
+                    powerOnLog("FlushChannelNow on active RX channels prior to gate open");
+                    WDSP.FlushChannelNow(WDSP.id(0, 0));
+                    if (radio.GetDSPRX(0, 1).Active) WDSP.FlushChannelNow(WDSP.id(0, 1));
+                    if (radio.GetDSPRX(1, 0).Active) WDSP.FlushChannelNow(WDSP.id(2, 0));
+                    powerOnLog("FlushChannelNow done; opening IQ gate (SetRxWdspReady=1)");
                     NetworkIO.nativeSunSDRSetRxWdspReady(1);
+                    powerOnLog("IQ gate OPEN — first xrouter dispatch should follow within ~5 ms");
+
+                    // Deferred VAC enable (see "deferVacForSunsdr" earlier
+                    // in this method). Wait one more window so the first
+                    // samples have flowed through xrouter -> WDSP RX ->
+                    // AAMix and are sitting in AAMix's output ring before
+                    // VAC starts pulling. 200 ms = ~40 IQ packets at the
+                    // 5 ms wire cadence, plenty for the first WDSP block to
+                    // accumulate, traverse the filter chain, and land at
+                    // AAMix output. Without this delay VAC sees an empty
+                    // ring on its very first MME callback => underflow.
+                    Thread.Sleep(200);
+                    powerOnLog("200ms VAC-settle elapsed, enabling VAC if user has it on");
+                    if (vac_enabled) VACEnabled = true;
+                    if (vac2_enabled) VAC2Enabled = true;
+                    powerOnLog($"VAC state: VACEnabled={vac_enabled} VAC2Enabled={vac2_enabled}");
+
+                    // Deferred noise-reducer RESTORE. We forced NR1/2/3/4
+                    // off above (before SetChannelState) so their noise
+                    // models would not be poisoned by the filter-ringing /
+                    // DC-settling samples in the first 50-100 ms after the
+                    // channel arms. Now wait until the pipeline has been
+                    // delivering clean steady-state samples for a moment,
+                    // then re-enable each NR exactly to the user's saved
+                    // state. EMNR will start fresh from clean samples.
+                    int[,] savedNRCapture = savedNR;
+                    Task.Run(async () =>
+                    {
+                        await Task.Delay(700);
+                        BeginInvoke(new MethodInvoker(() =>
+                        {
+                            if (!chkPower.Checked) return; // user already powered off
+                            for (int rxIdx = 0; rxIdx < 2; rxIdx++)
+                            {
+                                for (int sub = 0; sub < 2; sub++)
+                                {
+                                    var dsp = radio.GetDSPRX(rxIdx, sub);
+                                    if (dsp == null) continue;
+                                    int packed = savedNRCapture[rxIdx, sub];
+                                    dsp.Force = true; // ensure DSP-side push regardless of cache state
+                                    if ((packed & 1) != 0) dsp.RXANR1Run = 1;
+                                    if ((packed & 2) != 0) dsp.RXANR2Run = 1;
+                                    if ((packed & 4) != 0) dsp.RXANR3Run = 1;
+                                    if ((packed & 8) != 0) dsp.RXANR4Run = 1;
+                                    dsp.Force = false;
+                                    powerOnLog($"NR-RESTORE: rx={rxIdx} sub={sub} restored=0x{packed:X}");
+                                }
+                            }
+                        }));
+                    });
 
                     // Re-assert xPA state now that the radio is powered.
                     // On app restart, chkExternalPA.Checked gets restored
@@ -28138,6 +28328,16 @@ namespace Thetis
                     // still disabled until user toggles the button twice.
                     if (chkExternalPA.Checked)
                         NetworkIO.nativeSunSDRSetPA(1);
+
+                    // Re-assert the preamp/ATT state to whatever the combo
+                    // shows. The startup macro always sends 0x05=0x83 (+10 dB
+                    // preamp); without this re-assert, the radio sticks at
+                    // +10 dB regardless of the user's saved combo value.
+                    // Calling the SelectedIndexChanged handler directly
+                    // reads comboPreamp.Text and pushes the matching wire
+                    // byte via nativeSunSDRSetPreampAtt().
+                    powerOnLog($"Re-assert preamp/ATT: comboPreamp.Text='{comboPreamp.Text}'");
+                    comboPreamp_SelectedIndexChanged(this, EventArgs.Empty);
 
                     // Re-assert mic source. The init macro already fires
                     // OP 0x21 with sdr.currentMicSource baked in, so this
@@ -28154,6 +28354,7 @@ namespace Thetis
                 }
 
                 DataFlowing = true;
+                powerOnLog("=== Power-On COMPLETE === DataFlowing=true; NR-restore Task in flight at T+700ms");
                 SetupForm.UpdateGeneraHardware();
                 SetMicGain();
                 chkQSK_CheckStateChanged(this, EventArgs.Empty);
@@ -28166,66 +28367,46 @@ namespace Thetis
             }
             else
             {
+                // ============================================================
+                // Power-OFF teardown — REORDERED 2026-04-26 (k0koz).
+                //
+                // Old order (consumer-LAST) caused two visible problems:
+                //   (1) Underflow spike on every Power-Off because VAC was
+                //       still running while WDSP+Audio.Stop tore down for
+                //       up to ~500ms with nothing to feed it.
+                //   (2) Suspected contributor to nvwgf2umx D3D11 heap-
+                //       corruption on app exit — UI poller threads were
+                //       reading from WDSP/specRX buffers that the audio
+                //       teardown had already started invalidating.
+                //
+                // New order (consumer-FIRST):
+                //   STAGE 1 — Stop VAC consumers (no more sample demand)
+                //   STAGE 2 — Join UI / poller threads (no more buffer reads)
+                //   STAGE 3 — Other UI / form cleanup (CWX, button states, colors)
+                //   STAGE 4 — Stop processors (WDSP RX channels, mixer, DDCs)
+                //   STAGE 5 — Stop source (Audio.Stop -> 0x02 + join IQ thread + ASIO)
+                //
+                // Net: by the time Audio.Stop's blocking thread-joins run,
+                // nothing downstream is reading or writing audio buffers,
+                // so no underflows accumulate and no race is possible
+                // between teardown and a still-active poller.
+                // ============================================================
                 DataFlowing = false;
                 SetupForm.TestIMD = false;
 
-                if (HaveSync) //fix
-                {
-                    WDSP.SetChannelState(WDSP.id(0, 0), 0, 1);
-                    if (radio.GetDSPRX(0, 1).Active) WDSP.SetChannelState(WDSP.id(0, 1), 0, 1);
-                    if (radio.GetDSPRX(1, 0).Active) WDSP.SetChannelState(WDSP.id(2, 0), 0, 1);
-                }
-
-                UpdateAAudioMixerStates();
-                UpdateDDCs(rx2_enabled);
-
-                if (m_frmCWXForm != null && !m_frmCWXForm.IsDisposed)
-                    m_frmCWXForm.StopEverything(chkPower.Checked); //[2.10.3]MW0LGE
-
-                chkMOX.Checked = false;
-                chkMOX.Enabled = false;
-                chkTUN.Checked = false;
-                chkTUN.Enabled = false;
-                chk2TONE.Checked = false;  // MW0LGE_21a
-                chk2TONE.Enabled = false;
-
-                if (serialPTT != null)  // let go of serial port
-                {
-                    serialPTT.Destroy();
-                    serialPTT = null;
-                }
-
-                chkVFOLock.Enabled = false;
-                chkVFOBLock.Enabled = false; //[2.10.3.7]MW0LGE
-
-                chkPower.BackColor = SystemColors.Control;
-                txtVFOAFreq.ForeColor = vfo_text_dark_color;
-                txtVFOAMSD.ForeColor = vfo_text_dark_color;
-                txtVFOALSD.ForeColor = vfo_text_dark_color;
-                UpdateVFOASub();
-
-                txtVFOBFreq.ForeColor = vfo_text_dark_color;
-                txtVFOBMSD.ForeColor = vfo_text_dark_color;
-                txtVFOBLSD.ForeColor = vfo_text_dark_color;
-                txtVFOBBand.ForeColor = band_text_dark_color;
-
-                timer_peak_text.Enabled = false;
-
-                //NetworkIO.StopAudio();
-                Audio.Stop();
-
+                // -------- STAGE 1: stop CONSUMERS first --------
                 if (vac_enabled)
                 {
                     ivac.SetIVACrun(0, 0);
                     ivac.StopAudioIVAC(0);
                 }
-
                 if (vac2_enabled)
                 {
                     ivac.SetIVACrun(1, 0);
                     ivac.StopAudioIVAC(1);
                 }
 
+                // -------- STAGE 2: stop UI / poller THREADS --------
                 if (multimeter_thread != null)
                 {
                     if (!multimeter_thread.Join(/*500*/Math.Max(meter_delay, meter_dig_delay) + 50)) //MW0LGE change to meter delay
@@ -28248,11 +28429,6 @@ namespace Thetis
                         multimeter2_thread_rx2.Abort();
                 }
                 //
-                if (rx2_sql_update_thread != null)
-                {
-                    if (!rx2_sql_update_thread.Join(500))
-                        rx2_sql_update_thread.Abort();
-                }
                 if (rx2_sql_update_thread != null)
                 {
                     if (!rx2_sql_update_thread.Join(500))
@@ -28309,6 +28485,53 @@ namespace Thetis
                     ATUTunetokenSource.Cancel();
                 }
 
+                // -------- STAGE 3: other UI / form cleanup --------
+                if (m_frmCWXForm != null && !m_frmCWXForm.IsDisposed)
+                    m_frmCWXForm.StopEverything(chkPower.Checked); //[2.10.3]MW0LGE
+
+                chkMOX.Checked = false;
+                chkMOX.Enabled = false;
+                chkTUN.Checked = false;
+                chkTUN.Enabled = false;
+                chk2TONE.Checked = false;  // MW0LGE_21a
+                chk2TONE.Enabled = false;
+
+                if (serialPTT != null)  // let go of serial port
+                {
+                    serialPTT.Destroy();
+                    serialPTT = null;
+                }
+
+                chkVFOLock.Enabled = false;
+                chkVFOBLock.Enabled = false; //[2.10.3.7]MW0LGE
+
+                chkPower.BackColor = SystemColors.Control;
+                txtVFOAFreq.ForeColor = vfo_text_dark_color;
+                txtVFOAMSD.ForeColor = vfo_text_dark_color;
+                txtVFOALSD.ForeColor = vfo_text_dark_color;
+                UpdateVFOASub();
+
+                txtVFOBFreq.ForeColor = vfo_text_dark_color;
+                txtVFOBMSD.ForeColor = vfo_text_dark_color;
+                txtVFOBLSD.ForeColor = vfo_text_dark_color;
+                txtVFOBBand.ForeColor = band_text_dark_color;
+
+                timer_peak_text.Enabled = false;
+
+                // -------- STAGE 4: stop PROCESSORS (WDSP, mixer, DDCs) --------
+                if (HaveSync) //fix
+                {
+                    WDSP.SetChannelState(WDSP.id(0, 0), 0, 1);
+                    if (radio.GetDSPRX(0, 1).Active) WDSP.SetChannelState(WDSP.id(0, 1), 0, 1);
+                    if (radio.GetDSPRX(1, 0).Active) WDSP.SetChannelState(WDSP.id(2, 0), 0, 1);
+                }
+
+                UpdateAAudioMixerStates();
+                UpdateDDCs(rx2_enabled);
+
+                // -------- STAGE 5: stop SOURCE (radio + read thread + ASIO) --------
+                //NetworkIO.StopAudio();
+                Audio.Stop();
             }
 
             panelVFOAHover.Invalidate();
@@ -28950,10 +29173,37 @@ namespace Thetis
             GanymedeCATEnabled = false;
 
             shutdownLogStringToPath("Before power off");
-            if (chkPower.Checked == true)  // If we're quitting without first clicking off the "Power" button            
+            if (chkPower.Checked == true)  // If we're quitting without first clicking off the "Power" button
                 chkPower.Checked = false;
 
             Thread.Sleep(200); //[2.10.3.12]MW0LGE give some time for power down, increased to 200ms as psform loops were not detecting power off fast enough
+
+            // SUNSDR-only: SunSDRPowerOff (called above via
+            // chkPower.Checked=false) only stops the audio-path
+            // threads (read thread, keepalive, ASIO). The TX pacing
+            // thread, the async-log writer thread, the native UDP
+            // ctrl/stream sockets, the 1 ms timer-resolution boost
+            // and the PowerRequest handle are STILL ALIVE and will
+            // not be cleaned up unless we explicitly call
+            // SunSDRDestroy here. Without this call, the OS forcibly
+            // tears them down at process termination — async-logger
+            // mid-write into a closed file handle, sockets being
+            // ripped while a recv() is pending, etc. Strong candidate
+            // for the 0xc0000374 heap corruption seen during
+            // nvwgf2umx (NVIDIA D3D11) teardown later in this same
+            // close path. Doing it here, BEFORE Display.ShutdownDX2D
+            // below, ensures no SunSDR native thread is still touching
+            // memory while D3D11 is releasing its surfaces.
+            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
+            {
+                shutdownLogStringToPath("Before nativeSunSDRDestroy");
+                try { NetworkIO.nativeSunSDRDestroy(); }
+                catch (Exception ex)
+                {
+                    shutdownLogStringToPath("nativeSunSDRDestroy threw: " + ex.Message);
+                }
+                shutdownLogStringToPath("After nativeSunSDRDestroy");
+            }
 
             if (psform != null)
             {
@@ -29114,6 +29364,26 @@ namespace Thetis
                 {
                     //using block will auto close stream
                     w.WriteLine(entry);
+                }
+            }
+            catch { }
+        }
+
+        // Power-On flow tracer — gated on the same -logshutdown CLI arg
+        // as shutdownLogStringToPath so release builds don't drop a
+        // poweron_log.txt in %AppData%. Output is ms-precision, written
+        // to %AppData%\ArtemisSDR\poweron_log.txt only when the user
+        // explicitly opts in to diagnostic logging.
+        private void powerOnLog(string entry)
+        {
+            if (!m_bLogShutdown || string.IsNullOrEmpty(entry)) return;
+            try
+            {
+                long ms = System.Diagnostics.Stopwatch.GetTimestamp() * 1000L
+                          / System.Diagnostics.Stopwatch.Frequency;
+                using (StreamWriter w = File.AppendText(AppDataPath + "\\poweron_log.txt"))
+                {
+                    w.WriteLine("{0:O} qpc_ms={1} | {2}", DateTime.UtcNow, ms, entry);
                 }
             }
             catch { }
@@ -37792,6 +38062,7 @@ namespace Thetis
                 bool ok = ARP.PlayFileViaWDSP("quick", file, 0, out string error);
                 if (!ok)
                 {
+                    MessageBox.Show("Quick Play failed: " + (string.IsNullOrEmpty(error) ? "unknown" : error), "Quick Play", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     ckQuickPlay.CheckedChanged -= ckQuickPlay_CheckedChanged;
                     ckQuickPlay.Checked = false;
                     ckQuickPlay.CheckedChanged += ckQuickPlay_CheckedChanged;
@@ -37845,6 +38116,7 @@ namespace Thetis
                 string filename = ARP.RecordToFileFromWDSP("quick", file, 0, out string error, true, details);
                 if(string.IsNullOrEmpty(filename))
                 {
+                    MessageBox.Show("Quick Record failed: " + (string.IsNullOrEmpty(error) ? "unknown" : error), "Quick Record", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     ckQuickRec.CheckedChanged -= ckQuickRec_CheckedChanged;
                     ckQuickRec.Checked = false;
                     ckQuickRec.CheckedChanged += ckQuickRec_CheckedChanged;

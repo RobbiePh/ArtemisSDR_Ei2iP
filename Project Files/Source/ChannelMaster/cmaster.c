@@ -327,12 +327,28 @@ void create_cmaster()
 void destroy_cmaster()
 {
 	int i;
+	/* REORDERED 2026-04-27 (k0koz): stop per-receiver / per-transmitter
+	 * analyzer dispatcher threads BEFORE destroying the router, the
+	 * audio mixer and the analyzer pool that those threads read from.
+	 *
+	 * Old order destroyed the router/aamix/analyzer-pool first, then
+	 * called destroy_rcvr/destroy_xmtr last — and DestroyAnalyzer is
+	 * inside those. So the analyzer's sendbuf dispatcher kept iterating
+	 * on shared input buffers that destroy_router had ALREADY freed,
+	 * producing 0xc0000374 heap corruption on app exit (crash dump
+	 * 8988.dmp: wdsp!sendbuf+0x262 in analyzer.c). NR2 made it more
+	 * reproducible because EMNR's heavier per-block work shifted the
+	 * dispatcher to a more vulnerable phase of its loop when teardown
+	 * hit.
+	 *
+	 * New order: stop dispatchers first, then free the buffers.
+	 */
+	destroy_rcvr();
+	destroy_xmtr();
 	destroy_analyzer_alloc();
 	destroy_router(0, 0);
 	destroy_cmasio();
 	destroy_aamix  (0, 0);
-	destroy_xmtr();
-	destroy_rcvr();
 	for (i = 0; i < pcm->cmSTREAM; i++)
 	{
 		DeleteCriticalSection (&pcm->update[i]);
@@ -458,6 +474,12 @@ void SetRunPanadapter (int id, int run)
 	_InterlockedExchange (&pcm->rcvr[id].run_pan, run);
 }
 
+/* Declared in sunsdr.c. Place this BEFORE PORT below so the export
+ * macro still applies to SetXcmInrate — when this extern decl was
+ * inserted between PORT and the function, PORT silently shifted onto
+ * the extern decl and the C# P/Invoke startup-failed with
+ * EntryPointNotFoundException. */
+extern void sdr_logf(const char* fmt, ...);
 PORT
 void SetXcmInrate (int in_id, int rate)	// 2014-12-18:  called for streams 0, 1, 3, 4 (RX).  Stream 2 (TX) called in CMCreateCMaster().
 {
@@ -465,6 +487,14 @@ void SetXcmInrate (int in_id, int rate)	// 2014-12-18:  called for streams 0, 1,
 	EnterCriticalSection (&pcm->update[in_id]);
 	if (pcm->xcm_inrate[in_id] != rate)
 	{
+		int rx_for_log = (stype(in_id) == 0) ? rxid(in_id) : -1;
+		int old_inrate = pcm->xcm_inrate[in_id];
+		int old_insize = pcm->xcm_insize[in_id];
+		int old_chout  = (rx_for_log >= 0 && rx_for_log < pcm->cmRCVR) ? pcm->rcvr[rx_for_log].ch_outsize : -1;
+		int old_aout   = pcm->audio_outsize;
+		sdr_logf("[RATE-CASCADE BEFORE] in_id=%d stype=%d rx=%d  xcm_inrate=%d -> %d  xcm_insize=%d  rcvr.ch_outsize=%d  audio_outsize=%d\n",
+			in_id, stype(in_id), rx_for_log, old_inrate, rate, old_insize, old_chout, old_aout);
+
 		pcm->xcm_inrate[in_id] = rate;
 		pcm->xcm_insize[in_id] = getbuffsize (rate);
 		SetCMRingOutsize(in_id, pcm->xcm_insize[in_id]);
@@ -510,7 +540,29 @@ void SetXcmInrate (int in_id, int rate)	// 2014-12-18:  called for streams 0, 1,
 						SetAAudioRingInsize  (0, 0, pcm->audio_outsize);
 						SetAAudioRingOutsize (0, 0, pcm->audio_outsize);
 					}
+					/* CRITICAL: pipe.c::create_pipe allocated ppip->rbuff[rx]
+					 * with the ORIGINAL ch_outsize. The downstream xcmaster
+					 * audio path (pipe.c xcmaster, case 1) memcpy's
+					 * ch_outsize complex samples into ppip->rbuff[rx] every
+					 * iteration. If ch_outsize grew (initial Anan-style 64
+					 * -> SunSDR 96), the memcpy stomps 32 complex × sizeof
+					 * = 512 bytes past the rbuff[rx] allocation, corrupting
+					 * heap thousands of times per second — strong candidate
+					 * for the destroy_snba+0xdd 0xc0000374 crashes seen on
+					 * app exit and the intermittent robotic-without-NR
+					 * audio. Resize rbuff[rx] in lockstep with ch_outsize. */
+					if (ppip != NULL && ppip->rbuff != NULL && ppip->rbuff[rx] != NULL)
+					{
+						_aligned_free (ppip->rbuff[rx]);
+						ppip->rbuff[rx] = (double *) malloc0 (pcm->rcvr[rx].ch_outsize * sizeof (complex));
+					}
 				}
+				sdr_logf("[RATE-CASCADE AFTER]  in_id=%d  xcm_inrate=%d  xcm_insize=%d  rcvr[%d].ch_outrate=%d  rcvr[%d].ch_outsize=%d  audio_outrate=%d  audio_outsize=%d  rbuff_resized_to=%d\n",
+					in_id, pcm->xcm_inrate[in_id], pcm->xcm_insize[in_id],
+					rx, pcm->rcvr[rx].ch_outrate,
+					rx, pcm->rcvr[rx].ch_outsize,
+					pcm->audio_outrate, pcm->audio_outsize,
+					pcm->rcvr[rx].ch_outsize);
 			}
 			break;
 		case 1:  // transmitter

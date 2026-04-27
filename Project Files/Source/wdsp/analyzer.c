@@ -1450,10 +1450,20 @@ void DestroyAnalyzer(int disp)
 {
 	DP a = pdisp[disp];
 	int i, j;
+	int spin_count = 0;
+	const int spin_limit = 200;	// 200 * Sleep(1) ~= 200ms max wait
 
 	a->end_dispatcher = 1;
-	while (InterlockedAnd(&a->dispatcher, 1))
+	while (InterlockedAnd(&a->dispatcher, 1) && spin_count < spin_limit)
+	{
 		Sleep(1);
+		spin_count++;
+	}
+	/* If we time out, the dispatcher thread didn't clear its flag —
+	 * either it was never started, or it's truly wedged. Proceed
+	 * anyway; the worst case is a small leak of analyzer state, but
+	 * that's strictly better than hanging app exit forever (5+ min
+	 * hang reported on a build that contained this loop unbounded). */
 
 	for (i = 0; i < a->max_stitch; i++)
 		for (j = 0; j < a->max_num_fft; j++)

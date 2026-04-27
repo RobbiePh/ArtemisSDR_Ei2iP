@@ -192,6 +192,37 @@ int getChannelOutputRate (int stype, int id)
 	return rate;
 }
 
+/* getbuffsize(rate) computes a NATURAL buffer size from the rate
+ * formula. That matches the actual rcvr/xmtr ch_outsize ONLY for
+ * integer-ratio sample rates (Anan/HL2 family at 48k/96k/192k/etc.).
+ *
+ * For SunSDR2 DX native rates (312.5/156.25/78.125 kHz vs 48 kHz),
+ * SetXcmInrate recomputes ch_outsize as
+ *   xcm_insize * ch_outrate / xcm_inrate
+ * which gives 96 for the 312500/48000 case — different from the
+ * naive getbuffsize(48000)=64. Code that needs the ACTUAL block
+ * size of data flowing out of a channel (e.g. the wav-recording
+ * path in cmaster.cs::wrecord) MUST use this getter, not
+ * getbuffsize(ch_outrate). Mismatch produces correctly-rated
+ * recordings that drop / overrun samples per block — audible as
+ * robotic / pitch-shifted WAV files.
+ */
+PORT
+int getChannelOutputSize (int stype, int id)
+{
+	int size = 0;
+	switch (stype)
+	{
+	case 0:
+		size = pcm->rcvr[id].ch_outsize;
+		break;
+	case 1:
+		size = pcm->xmtr[id].ch_outsize;
+		break;
+	}
+	return size;
+}
+
 // Inbound Stream & Channel IDs
 //
 // Inbound Data Streams are numbered beginning with receiver streams, followed by transmitter streams, and

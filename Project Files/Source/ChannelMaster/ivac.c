@@ -142,6 +142,7 @@ PORT void xvacIN(int id, double* in_tx, int bypass)
 			xrmatchOUT (a->rmatchIN, a->bitbucket);
 }
 
+extern void sdr_logf(const char* fmt, ...);
 PORT void xvacOUT(int id, int stream, double* data)
 {
 	IVAC a = pvac[id];
@@ -151,6 +152,23 @@ PORT void xvacOUT(int id, int stream, double* data)
 
 	if (a->run)
 	{
+		/* Diagnostic: log the configuration the FIRST time we actually
+		 * dispatch a real audio sample (run=1) into IVAC for each
+		 * (id, stream). Lets us see what audio_size/audio_rate/vac_size
+		 * IVAC believes it has at the moment audio first flows. */
+		static volatile int logged_first[8] = {0};
+		int slot = (id << 2) | (stream & 3);
+		if (slot >= 0 && slot < 8 && !logged_first[slot])
+		{
+			logged_first[slot] = 1;
+			sdr_logf("[IVAC FIRST AUDIO] id=%d stream=%d  iq_type=%d  audio_rate=%d audio_size=%d  vac_rate=%d vac_size=%d  iq_rate=%d iq_size=%d  txmon_rate=%d txmon_size=%d  mic_rate=%d mic_size=%d\n",
+				id, stream, a->iq_type,
+				a->audio_rate, a->audio_size,
+				a->vac_rate, a->vac_size,
+				a->iq_rate, a->iq_size,
+				a->txmon_rate, a->txmon_size,
+				a->mic_rate, a->mic_size);
+		}
 		if (!a->iq_type)
 		{	// call mixer to synchronize the two streams
 			if (stream == 1)
@@ -253,7 +271,12 @@ int CallbackIVAC(const void* input,
 	}
 
 	xrmatchOUT(a->rmatchOUT, out_ptr);
-	// if (id == 0)  WriteAudio (120.0, 48000, a->vac_size, out_ptr, 3); //
+	/* DIAGNOSTIC: WriteAudio call disabled. Tried briefly to capture
+	 * the rmatchOUT output but its 46 MB calloc on first call inside
+	 * the PortAudio callback (which has a tight ~21 ms budget at
+	 * 48 kHz/1024) was tripping MME underrun and silencing the
+	 * stream. Need a non-blocking capture mechanism instead. */
+	// if (id == 0) WriteAudio (120.0, (int)a->vac_rate, (int)a->vac_size, out_ptr, 3);
 	if (a->iq_type && a->swapIQout)
 	{
 		unsigned long count = (unsigned long)a->vac_size; // assumes vac_size is always the same as frameCount
@@ -507,7 +530,17 @@ PORT void SetIVACaudioSize(int id, int size)
 	destroy_aamix(a->mixer, 0);
 	{
 		int inrate[2] = { a->audio_rate, a->txmon_rate };
-		a->mixer = create_aamix(-1, id, a->audio_size, a->audio_size, 2, 3, 3, 1.0, 4096, inrate, a->audio_rate, xvac_out, 0.0, 0.0, 0.0, 0.0);
+		/* active=1 (was 3): only source 0 (RX audio) is REQUIRED to
+		 * unblock the mixer's WaitForMultipleObjects(...TRUE,INFINITE)
+		 * loop. With active=3 the mixer would deadlock if source 1
+		 * (TX monitor) wasn't fed — which on SunSDR pure-RX requires
+		 * a TX-silence keepalive in sunsdr.c. If that keepalive races
+		 * with mixer init / VAC enable on cold start, the mixer parks
+		 * forever and the entire VAC OUT path is silent
+		 * (intermittent silent-startup, project_startup_no_audio).
+		 * what=3 stays so source 1 is still INCLUDED in the mix when
+		 * it has data — just doesn't gate the loop. */
+		a->mixer = create_aamix(-1, id, a->audio_size, a->audio_size, 2, 1, 3, 1.0, 4096, inrate, a->audio_rate, xvac_out, 0.0, 0.0, 0.0, 0.0);
 	}
 	destroy_resamps(a);
 	create_resamps(a);

@@ -74,6 +74,9 @@ namespace Thetis
         [DllImport("wdsp.dll", EntryPoint = "SetChannelState", CallingConvention = CallingConvention.Cdecl)]
         public static extern int SetChannelState(int channel, int state, int dmode);
 
+        [DllImport("wdsp.dll", EntryPoint = "FlushChannelNow", CallingConvention = CallingConvention.Cdecl)]
+        public static extern void FlushChannelNow(int channel);
+
         [DllImport("wdsp.dll", EntryPoint = "SetChannelTDelayUp", CallingConvention = CallingConvention.Cdecl)]
         public static extern void SetChannelTDelayUp(int channel, double time);
 

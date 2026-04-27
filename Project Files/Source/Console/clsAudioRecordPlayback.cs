@@ -3154,13 +3154,20 @@ namespace Thetis
 
             if (recordRxPreProcessed)
             {
+                // Pre-processing path records IQ input — its block size equals
+                // xcm_insize (which == getbuffsize(xcm_inrate) by definition).
                 _rcvr_rate = cmaster.GetInputRate(0, _id);
                 _rcvr_size = cmaster.GetBuffSize(_rcvr_rate);
             }
             else
             {
+                // Post-processing path records audio output — block size MUST
+                // be ch_outsize (set by SetXcmInrate's recompute). For SunSDR
+                // 312500/48000 ch_outsize=96, getbuffsize(ch_outrate=48000)=64
+                // — using GetBuffSize here mis-sized the recording resampler
+                // and made WAVs play back at 1.5x speed (chipmunk/robotic).
                 _rcvr_rate = cmaster.GetChannelOutputRate(0, _id);
-                _rcvr_size = cmaster.GetBuffSize(_rcvr_rate);
+                _rcvr_size = cmaster.GetChannelOutputSize(0, _id);
             }
 
             if (recordTxPreProcessed)
@@ -3170,8 +3177,9 @@ namespace Thetis
             }
             else
             {
+                // Same fix as RX above for the TX post-processing path.
                 _xmtr_rate = cmaster.GetChannelOutputRate(1, 0);
-                _xmtr_size = cmaster.GetBuffSize(_xmtr_rate);
+                _xmtr_size = cmaster.GetChannelOutputSize(1, 0);
             }
 
             if (wfw_id == 0) RecordGain = (float)Audio.console.radio.GetDSPRX(0, 0).RXOutputGain;

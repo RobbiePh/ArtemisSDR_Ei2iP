@@ -2,20 +2,23 @@
 
 *Open source. Native protocol. Dedicated to Artemis II.*
 
-**Current version: v2.0.10**
+**Current version: v2.0.11**
 
 ⬇️ [**Download Latest Release**](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  📘 [**Quick Start Guide**](START_HERE_SUNSDR2DX.md)  ·  📝 [What's new](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  💬 [Discussions](https://github.com/kk68/ArtemisSDR/discussions)  ·  🐛 [Issues](https://github.com/kk68/ArtemisSDR/issues)
 
-### What's new in v2.0.10
+### What's new in v2.0.11
 
-- **ATT / Preamp setting now persists across TX and TUNE cycles** on the SunSDR2 DX. Prior versions wiped the user's selection back to the band default whenever the radio left transmit; the dropdown now keeps your `-20dB` (or whatever you set) through MOX, TUNE, and band changes.
-- **Crash-on-startup after settings-database corruption is recovered automatically.** Atomic writes plus a startup backup mean a previous unclean exit no longer leaves a partial `Artemis.mdb` that prevents the app from launching.
-- **App close no longer hangs** on a stuck "Please wait" dialog. Shutdown handlers are now bounded by a 3-second timeout; if a subscriber wedges, the app continues closing cleanly instead of blocking forever.
+- **Recording now sounds correct.** WAV files saved with the front-panel REC button are no longer pitched up / chipmunked — recordings now play back at the right speed and pitch on the SunSDR2 DX 312.5 kHz native rate.
+- **Power-On no longer leaves you with silent audio.** A long-standing intermittent bug where the radio would come up with no sound (even though VAC was running and S-meter was alive) is fixed.
+- **ATT / Preamp dropdown setting actually applies on Power-On.** Prior versions ignored your saved selection at startup and forced +10 dB; the radio now starts at ATT = 0 dB and your dropdown choice is honored.
+- **Smoother Power-On / Power-Off audio.** The brief burst of underflow / overflow VAC errors when you toggled power is gone. Power-Off now stops VAC first; Power-On waits for the IQ stream to settle before starting VAC.
+- **More stable application close.** Multiple cleanup-path crashes on exit are fixed (analyzer dispatcher, WDSP worker thread join, channel teardown ordering, recording-while-changing-frequency).
+- **Stops a subtle audio buffer overrun** that could cause occasional robotic / glitchy audio — the receive audio block size is now correctly recomputed when the SunSDR's 312.5 kHz rate is in use.
 
 ### Known issues — please read before filing a bug
 
-- **Robotic / garbled audio occasionally on cold start.** Power-cycle ArtemisSDR (Power off → Power on, or close + reopen) to clear it. Investigation underway.
-- **Rare crash on application exit after several band changes** (Windows reports `0xc0000374` heap corruption). The crash is during teardown — your settings, memories, and recordings are safe. No data loss.
+- **Robotic / garbled audio still occasionally on cold start.** Most cases are resolved in v2.0.11, but a residual race may still occur. If it happens, Power-cycle ArtemisSDR (Power off → Power on, or close + reopen) to clear it. Investigation continues.
+- **Rare crash on application exit** (Windows reports `0xc0000374` heap corruption). Several teardown crashes are fixed in v2.0.11; if you still see this, it is during shutdown — your settings, memories, and recordings are safe. No data loss.
 - **MUT button on the front panel does not mute.** Long-standing inherited bug from upstream Thetis; predates ArtemisSDR. Use VAC mute or your audio device's mute as a workaround.
 - **PS-A / 2-TONE / DUP** are grayed out — see the limitations table below; this is a hardware-architecture constraint of the SunSDR2 DX, not a bug.
 

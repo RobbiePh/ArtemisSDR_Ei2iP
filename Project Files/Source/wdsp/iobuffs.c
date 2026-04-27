@@ -452,9 +452,20 @@ void destroy_iobuffs (int channel)
 {
 	IOB a = ch[channel].iob.pc;
 
-	InterlockedBitTestAndSet(&a->flush_bypass, 0);
-	ReleaseSemaphore(a->Sem_Flush, 1, 0);
-	while (InterlockedAnd(&a->flush_bypass, 0xffffffff)) Sleep(1);
+	/* The flushChannel worker is now stopped earlier in
+	 * pre_main_destroy (channel.c) so DSP teardown can run without
+	 * racing flush_main(). The original handshake here:
+	 *
+	 *     InterlockedBitTestAndSet(&a->flush_bypass, 0);   // signal stop (=1)
+	 *     ReleaseSemaphore(a->Sem_Flush, 1, 0);             // wake thread
+	 *     while (InterlockedAnd(&a->flush_bypass, 0xffffffff)) Sleep(1);
+	 *
+	 * is incompatible with flushChannel having already exited:
+	 * flushChannel's exit clears flush_bypass back to 0, then setting
+	 * it to 1 again here with no thread to clear it produces an
+	 * infinite while-Sleep(1) hang on app exit. Skip the handshake
+	 * since pre_main_destroy already did it; just close the
+	 * semaphore handle. */
 	CloseHandle(a->Sem_Flush);
 
 	destroy_slews (a);
