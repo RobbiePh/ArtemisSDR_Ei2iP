@@ -556,6 +556,34 @@ void SetXcmInrate (int in_id, int rate)	// 2014-12-18:  called for streams 0, 1,
 						_aligned_free (ppip->rbuff[rx]);
 						ppip->rbuff[rx] = (double *) malloc0 (pcm->rcvr[rx].ch_outsize * sizeof (complex));
 					}
+					/* Same family of bug for the per-subrx audio[] buffers.
+					 * cmaster.c::create_rcvr allocates pcm->rcvr[rx].audio[j]
+					 * sized to getbuffsize(cmMAXAudioRate). At create time
+					 * cmMAXAudioRate=48000 and ch_outsize=getbuffsize(48000)=64
+					 * (integer-ratio default rates), so they match. After
+					 * SunSDR rate switch, ch_outsize grows to 96 but the
+					 * audio[] buffers are still 64 complex doubles = 1024
+					 * bytes. The WDSP RX channel writes ch_outsize complex
+					 * doubles into audio[j] every fexchange, stomping 32
+					 * complex × 16 = 512 bytes past the allocation. When the
+					 * stomped bytes land on an adjacent FIRcore plan's
+					 * fftin/fftout (NBP/SNBA/EMNR), the audio block whose
+					 * filter taps got corrupted plays back as robotic; when
+					 * they land on a heap header, the eventual free() at
+					 * exit catches it as STATUS_HEAP_CORRUPTION (seen in
+					 * deplan_fircore on the destroy_nbp path). Realloc
+					 * audio[j] for every subrx in lockstep with ch_outsize. */
+					{
+						int sub;
+						for (sub = 0; sub < pcm->cmSubRCVR; sub++)
+						{
+							if (pcm->rcvr[rx].audio[sub] != NULL)
+							{
+								_aligned_free (pcm->rcvr[rx].audio[sub]);
+								pcm->rcvr[rx].audio[sub] = (double *) malloc0 (pcm->rcvr[rx].ch_outsize * sizeof (complex));
+							}
+						}
+					}
 				}
 				sdr_logf("[RATE-CASCADE AFTER]  in_id=%d  xcm_inrate=%d  xcm_insize=%d  rcvr[%d].ch_outrate=%d  rcvr[%d].ch_outsize=%d  audio_outrate=%d  audio_outsize=%d  rbuff_resized_to=%d\n",
 					in_id, pcm->xcm_inrate[in_id], pcm->xcm_insize[in_id],

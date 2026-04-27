@@ -2,23 +2,18 @@
 
 *Open source. Native protocol. Dedicated to Artemis II.*
 
-**Current version: v2.0.11**
+**Current version: v2.0.12**
 
 ⬇️ [**Download Latest Release**](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  📘 [**Quick Start Guide**](START_HERE_SUNSDR2DX.md)  ·  📝 [What's new](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  💬 [Discussions](https://github.com/kk68/ArtemisSDR/discussions)  ·  🐛 [Issues](https://github.com/kk68/ArtemisSDR/issues)
 
-### What's new in v2.0.11
+### What's new in v2.0.12
 
-- **Recording now sounds correct.** WAV files saved with the front-panel REC button are no longer pitched up / chipmunked — recordings now play back at the right speed and pitch on the SunSDR2 DX 312.5 kHz native rate.
-- **Power-On no longer leaves you with silent audio.** A long-standing intermittent bug where the radio would come up with no sound (even though VAC was running and S-meter was alive) is fixed.
-- **ATT / Preamp dropdown setting actually applies on Power-On.** Prior versions ignored your saved selection at startup and forced +10 dB; the radio now starts at ATT = 0 dB and your dropdown choice is honored.
-- **Smoother Power-On / Power-Off audio.** The brief burst of underflow / overflow VAC errors when you toggled power is gone. Power-Off now stops VAC first; Power-On waits for the IQ stream to settle before starting VAC.
-- **More stable application close.** Multiple cleanup-path crashes on exit are fixed (analyzer dispatcher, WDSP worker thread join, channel teardown ordering, recording-while-changing-frequency).
-- **Stops a subtle audio buffer overrun** that could cause occasional robotic / glitchy audio — the receive audio block size is now correctly recomputed when the SunSDR's 312.5 kHz rate is in use.
+- **Robotic / glitchy audio on cold start is fixed.** A receive-path buffer was 33% too small on the SunSDR's native 312.5 kHz rate; on most starts the over-write was harmless, but occasionally it landed on filter coefficients and produced the distorted audio you'd hear until you restarted the app. Companion to the partial fix in v2.0.11.
+- **Exit-on-close crash from the same root cause is fixed.** When the over-write landed on a heap header instead of filter taps, app close would trip a heap-corruption crash (`0xc0000374`) inside DSP teardown. Same root-cause fix closes both symptoms.
 
 ### Known issues — please read before filing a bug
 
-- **Robotic / garbled audio still occasionally on cold start.** Most cases are resolved in v2.0.11, but a residual race may still occur. If it happens, Power-cycle ArtemisSDR (Power off → Power on, or close + reopen) to clear it. Investigation continues.
-- **Rare crash on application exit** (Windows reports `0xc0000374` heap corruption). Several teardown crashes are fixed in v2.0.11; if you still see this, it is during shutdown — your settings, memories, and recordings are safe. No data loss.
+- **Rare crash on application exit** (Windows reports `0xc0000374` heap corruption) tied to the panadapter / GPU driver disposal path may still occur on some systems. The crash is during shutdown — your settings, memories, and recordings are safe. No data loss.
 - **MUT button on the front panel does not mute.** Long-standing inherited bug from upstream Thetis; predates ArtemisSDR. Use VAC mute or your audio device's mute as a workaround.
 - **PS-A / 2-TONE / DUP** are grayed out — see the limitations table below; this is a hardware-architecture constraint of the SunSDR2 DX, not a bug.
 
