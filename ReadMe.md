@@ -47,7 +47,6 @@ When **VAC + ASIO is the right choice instead:** if you need VAC to feed digital
 - **Rare crash on application exit** (Windows reports `0xc0000374` heap corruption) tied to the panadapter / GPU driver disposal path may still occur on some systems. The crash is during shutdown — your settings, memories, and recordings are safe. No data loss.
 - **MUT button on the front panel does not mute.** Long-standing inherited bug from upstream Thetis; predates ArtemisSDR. Use VAC mute or your audio device's mute as a workaround.
 - **PS-A / 2-TONE / DUP** are grayed out — see the limitations table below; this is a hardware-architecture constraint of the SunSDR2 DX, not a bug.
-- **cmASIO panel notes** still mention "Thetis", "OpenHPSDR\Thetis-x64", and "Protocol 1/2" — these are inherited from upstream and will be cleaned up in a future release. Functionally they don't affect the SunSDR ASIO path.
 
 ![ArtemisSDR running on 40m — panadapter + waterfall, SunSDR2 DX native protocol](docs/screenshot-main.png)
 
