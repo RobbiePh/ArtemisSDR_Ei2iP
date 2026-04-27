@@ -53,8 +53,16 @@ void create_cmasio()
 	pcma->protocol = 1; // default Protocol 2
 	pcma->blocksize = pcm->audio_outsize;
 	int samplerate = pcm->audio_outrate;
+	sdr_logf("[CMASIO ENTRY] create_cmasio() called: blocksize=%d samplerate=%d audio_outsize=%d audio_outrate=%d\n",
+		pcma->blocksize, samplerate, pcm->audio_outsize, pcm->audio_outrate);
 	char* asioDriverName = (char*)calloc(32, sizeof(char));
-	if (getASIODriverString(asioDriverName) != 0) { free(asioDriverName); return; }
+	int regResult = getASIODriverString(asioDriverName);
+	if (regResult != 0) {
+		sdr_logf("[CMASIO FAIL] getASIODriverString returned %d (no driver configured in registry) — cmASIO will not start\n", regResult);
+		free(asioDriverName);
+		return;
+	}
+	sdr_logf("[CMASIO REGISTRY] driver name read from registry: \"%s\" (regResult=%d)\n", asioDriverName, regResult);
 	char buf[128];
 	sprintf_s(buf, 128, "Initializing cmASIO with: \nblock size = %d\nsample rate = %d\ndriver name = \"%s\"\n\n", pcma->blocksize, samplerate, asioDriverName);
 	OutputDebugStringA(buf);
@@ -74,6 +82,11 @@ void create_cmasio()
 	int result = prepareASIO(pcma->blocksize, samplerate, asioDriverName, &CallbackASIO, input_base_channel, output_base_channel);
 	sprintf_s(buf, 128, "prepareASIO return = %d", result);
 	OutputDebugStringA(buf);
+	sdr_logf("[CMASIO PREPARE] prepareASIO(driver=\"%s\", blocksize=%d, rate=%d, in_base=%ld, out_base=%ld) returned %d  (0=success, non-zero=fail)\n",
+		asioDriverName, pcma->blocksize, samplerate, input_base_channel, output_base_channel, result);
+	if (result != 0) {
+		sdr_logf("[CMASIO FAIL] cmASIO will not start — common causes: another app holds the ASIO driver exclusively, driver name mismatch, sample rate not supported by driver, or driver init error. cmaError will be set to %d.\n", result);
+	}
 	if (result == 0)
 	{
 		sprintf_s(buf, 128, "ASIO driver \"%s\" is loaded, initialized, and prepared.", asioDriverName);

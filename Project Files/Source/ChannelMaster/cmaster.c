@@ -539,6 +539,24 @@ void SetXcmInrate (int in_id, int rate)	// 2014-12-18:  called for streams 0, 1,
 						pcm->audio_outsize = pcm->rcvr[0].ch_outsize;
 						SetAAudioRingInsize  (0, 0, pcm->audio_outsize);
 						SetAAudioRingOutsize (0, 0, pcm->audio_outsize);
+						/* Same buffer-overrun bug class as audio[j] / ppip->rbuff,
+						 * just at coarser granularity for cmASIO. create_cmasio()
+						 * runs once at startup and caches pcma->blocksize =
+						 * pcm->audio_outsize at that moment (typically 64 for the
+						 * default 192k integer ratio). When SunSDR's SetXcmInrate
+						 * later switches to 312500, audio_outsize grows to 96 but
+						 * pcma->blocksize stays 64 — and the rmatchIN/rmatchOUT
+						 * resamplers + pcma->input/output buffers were all sized
+						 * from that stale 64. asioOUT then receives 96-sample
+						 * blocks from the mixer but xrmatchIN reads only 64,
+						 * dropping 33% of samples per block — symptom: cmASIO
+						 * runs (state=1, no overflows), but no audible audio.
+						 * Fix: tear down + recreate cmASIO so it picks up the
+						 * new audio_outsize. destroy_cmasio() bails early if
+						 * cmASIO wasn't running, so this is a no-op when no
+						 * ASIO driver is configured. */
+						destroy_cmasio();
+						create_cmasio();
 					}
 					/* CRITICAL: pipe.c::create_pipe allocated ppip->rbuff[rx]
 					 * with the ORIGINAL ch_outsize. The downstream xcmaster

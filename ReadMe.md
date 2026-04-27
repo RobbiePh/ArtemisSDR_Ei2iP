@@ -2,20 +2,52 @@
 
 *Open source. Native protocol. Dedicated to Artemis II.*
 
-**Current version: v2.0.12**
+**Current version: v2.0.13**
 
 ⬇️ [**Download Latest Release**](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  📘 [**Quick Start Guide**](START_HERE_SUNSDR2DX.md)  ·  📝 [What's new](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  💬 [Discussions](https://github.com/kk68/ArtemisSDR/discussions)  ·  🐛 [Issues](https://github.com/kk68/ArtemisSDR/issues)
 
-### What's new in v2.0.12
+### What's new in v2.0.13
 
-- **Robotic / glitchy audio on cold start is fixed.** A receive-path buffer was 33% too small on the SunSDR's native 312.5 kHz rate; on most starts the over-write was harmless, but occasionally it landed on filter coefficients and produced the distorted audio you'd hear until you restarted the app. Companion to the partial fix in v2.0.11.
-- **Exit-on-close crash from the same root cause is fixed.** When the over-write landed on a heap header instead of filter taps, app close would trip a heap-corruption crash (`0xc0000374`) inside DSP teardown. Same root-cause fix closes both symptoms.
+- **cmASIO is back under Setup → Audio.** A direct, low-latency ASIO output path (bypassing VAC + PortAudio) for users with an ASIO-capable interface (MOTU, RME, Focusrite, etc.). The cmASIO tab was hidden in upstream Thetis and never wired correctly for SunSDR; it now appears unconditionally and starts correctly on the SunSDR's 312.5 kHz native rate.
+
+### Why cmASIO instead of VAC + ASIO?
+
+VAC + ASIO and cmASIO both end up at the same ASIO driver, but the signal chains are very different:
+
+| Path | Pipeline |
+|---|---|
+| **VAC + ASIO driver** (the `Driver: ASIO` option on the VAC1/VAC2 tab) | WDSP audio → VAC virtual cable → ring buffer → **PortAudio** → PortAudio's ASIO host wrapper → ASIO driver → hardware |
+| **cmASIO** (the new tab) | WDSP audio → ChannelMaster → **native Steinberg ASIO SDK direct** → ASIO driver → hardware |
+
+What you get with cmASIO that you don't get with VAC + ASIO:
+
+- **Lower latency.** Two intermediate hops drop out of the signal chain (the VAC virtual-cable ring buffer and the PortAudio host wrapper). Useful for digital modes, contest operation, and any workflow where round-trip latency matters.
+- **Cleaner signal path.** Direct Steinberg ASIO SDK calls instead of PortAudio's wrapper. Fewer places for a buffer-size or rate mismatch to creep in.
+- **No VAC required for hardware audio out.** If your only goal is "RX audio out of my ASIO interface", cmASIO does it without needing VAC enabled at all. (You can still enable VAC for digital-mode software routing — just not on the same ASIO driver cmASIO is using.)
+
+When **VAC + ASIO is the right choice instead:** if you need VAC to feed digital-mode software (WSJT-X, FLDIGI, N1MM Logger audio, etc.) AND you want that audio routed to your hardware, VAC + ASIO is the standard path. cmASIO replaces the *output to hardware* portion only.
+
+### How to configure cmASIO
+
+1. Open **Setup → Audio → cmASIO** (the new last sub-tab).
+2. Pick your ASIO device from **Available ASIO Device(s)**.
+3. Choose your **IN pair** and **OUT pair** (channel pairs your interface exposes — e.g. `ch1 + 2`).
+4. Pick **MIC source** (Left, Right, or Both).
+5. Click **Make Active**. The "Current cmASIO Device" line will populate.
+6. **Restart Artemis** — cmASIO initialises at startup and again automatically when the SunSDR locks in its 312.5 kHz native rate.
+7. After restart you should see a small green **cm** icon in the bottom-right status bar. Audio routes directly to your ASIO interface.
+
+**Important:**
+- cmASIO and VAC cannot share the same ASIO driver simultaneously. If VAC1/VAC2 has the same ASIO driver enabled, disable VAC before activating cmASIO (or vice versa).
+- The SunSDR has no on-radio audio codec, so the inherited "audio hardware in the radio will not be operable" warning on the cmASIO panel does not apply to SunSDR users.
+- To stop using cmASIO: open the cmASIO tab and click **Disable**, then restart Artemis.
 
 ### Known issues — please read before filing a bug
 
 - **Rare crash on application exit** (Windows reports `0xc0000374` heap corruption) tied to the panadapter / GPU driver disposal path may still occur on some systems. The crash is during shutdown — your settings, memories, and recordings are safe. No data loss.
 - **MUT button on the front panel does not mute.** Long-standing inherited bug from upstream Thetis; predates ArtemisSDR. Use VAC mute or your audio device's mute as a workaround.
 - **PS-A / 2-TONE / DUP** are grayed out — see the limitations table below; this is a hardware-architecture constraint of the SunSDR2 DX, not a bug.
+- **cmASIO panel notes** still mention "Thetis", "OpenHPSDR\Thetis-x64", and "Protocol 1/2" — these are inherited from upstream and will be cleaned up in a future release. Functionally they don't affect the SunSDR ASIO path.
 
 ![ArtemisSDR running on 40m — panadapter + waterfall, SunSDR2 DX native protocol](docs/screenshot-main.png)
 
