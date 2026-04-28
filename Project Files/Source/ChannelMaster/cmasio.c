@@ -52,9 +52,21 @@ void create_cmasio()
 {
 	pcma->protocol = 1; // default Protocol 2
 	pcma->blocksize = pcm->audio_outsize;
+	// TX-side block size: the TX stream's xcm_insize. On integer-ratio rates
+	// this matches blocksize; on SunSDR's 312500/48000 non-integer ratio,
+	// audio_outsize=96 (RX) but xmtr_insize=64 (TX). Use the TX-stream's
+	// actual block size so rmatchIN's pull-side matches what xcmaster's TX
+	// loop consumes per iteration.
+	{
+		int tx_stream = inid(1, 0);
+		pcma->tx_size = (tx_stream >= 0 && tx_stream < cmMAXstream)
+			? pcm->xcm_insize[tx_stream]
+			: pcma->blocksize;
+		if (pcma->tx_size <= 0) pcma->tx_size = pcma->blocksize;
+	}
 	int samplerate = pcm->audio_outrate;
-	sdr_logf("[CMASIO ENTRY] create_cmasio() called: blocksize=%d samplerate=%d audio_outsize=%d audio_outrate=%d\n",
-		pcma->blocksize, samplerate, pcm->audio_outsize, pcm->audio_outrate);
+	sdr_logf("[CMASIO ENTRY] create_cmasio() called: blocksize=%d tx_size=%d samplerate=%d audio_outsize=%d audio_outrate=%d\n",
+		pcma->blocksize, pcma->tx_size, samplerate, pcm->audio_outsize, pcm->audio_outrate);
 	char* asioDriverName = (char*)calloc(32, sizeof(char));
 	int regResult = getASIODriverString(asioDriverName);
 	if (regResult != 0) {
@@ -104,7 +116,13 @@ void create_cmasio()
 		sprintf_s(buf, 128, "blockNum = %d\nlockMode = %d", blockNum, pcma->lockMode);
 		OutputDebugStringA(buf);
 
-		pcma->rmatchIN = create_rmatchV(pcma->blocksize, pcma->blocksize, samplerate, samplerate, blockNum * pcma->blocksize, 1);
+		// rmatchIN: ASIO callback pushes `blocksize` (96) samples per fill;
+		// asioIN pulls `tx_size` (64 on SunSDR) samples per call. Same rate
+		// (samplerate==samplerate), just different block boundaries —
+		// rmatchV handles the buffer-size matching internally.
+		pcma->rmatchIN = create_rmatchV(pcma->blocksize, pcma->tx_size, samplerate, samplerate, blockNum * pcma->blocksize, 1);
+		// rmatchOUT: asioOUT pushes `blocksize` (96) samples; ASIO callback
+		// pulls `blocksize` (96) samples — RX side is symmetric.
 		pcma->rmatchOUT = create_rmatchV(pcma->blocksize, pcma->blocksize, samplerate, samplerate, blockNum * pcma->blocksize, 1);
 		forceRMatchVar(pcma->rmatchIN, 1, 1);
 		forceRMatchVar(pcma->rmatchOUT, 1, 1);
@@ -141,17 +159,24 @@ void destroy_cmasio()
 void asioIN(double* in_tx)
 {	// used for ASIO MIC data to TX
 	if (pcm->audioCodecId != ASIO) return;
+	// TX path uses tx_size, NOT blocksize. xcmaster's TX iteration consumes
+	// xcm_insize=tx_size complex samples per call. On SunSDR's non-integer
+	// rate ratio (audio_outsize=96 vs xmtr_insize=64) using blocksize=96
+	// here pulled 96 samples per call against a 750/sec call rate — total
+	// drain 72000 samples/sec vs ASIO supply 48000 samples/sec → constant
+	// underrun → robotic TX audio. Pulling tx_size=64 matches consumption
+	// to supply.
 	if (pcma->lockMode)
 	{
 		if (WaitForSingleObject(pcma->bufferFull, 2) == WAIT_TIMEOUT) { ++pcma->underFlowsIn; return; }
-		memcpy(in_tx, pcma->input, pcma->blocksize * sizeof(complex));
-		combinebuff(pcma->blocksize, in_tx, in_tx);
+		memcpy(in_tx, pcma->input, pcma->tx_size * sizeof(complex));
+		combinebuff(pcma->tx_size, in_tx, in_tx);
 		ReleaseSemaphore(pcma->bufferEmpty, 1, NULL);
 	}
 	else
 	{
 		xrmatchOUT(pcma->rmatchIN, in_tx);
-		combinebuff(pcma->blocksize, in_tx, in_tx);
+		combinebuff(pcma->tx_size, in_tx, in_tx);
 	}
 }
 

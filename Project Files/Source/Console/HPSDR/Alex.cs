@@ -314,6 +314,23 @@ namespace Thetis
 		private int m_nOld_rx_out = -99;
 		private bool m_bOld_tx = false;
 		private bool m_bOld_alex_enabled = false;
+
+		// Reset the antenna-selection cache so the next UpdateAlexAntSelection
+		// call ALWAYS sends fresh wire values to the radio. Used during SunSDR
+		// Power-On: after app restart + DB load, the per-band RxAnt[idx]/
+		// TxAnt[idx] values are populated from the database, but no band-
+		// change handler may fire before Power-On to push them through —
+		// leaving the radio on its hardware default antenna (A2 on HF, since
+		// sunsdr.c::sdr.currentRxAntenna initialises to 1 which maps to wire
+		// 0x01 = A2). Calling this before UpdateAlexAntSelection at Power-On
+		// guarantees the saved selection actually reaches the wire.
+		public void InvalidateAntennaCache()
+		{
+			m_nOld_rx_only_ant = -99;
+			m_nOld_trx_ant = -99;
+			m_nOld_tx_ant = -99;
+			m_nOld_rx_out = -99;
+		}
         public void UpdateAlexAntSelection(Band band, bool tx, bool alex_enabled, bool xvtr) 
 		{
 			if ( !alex_enabled ) 

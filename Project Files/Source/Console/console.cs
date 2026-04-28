@@ -6629,54 +6629,89 @@ namespace Thetis
         // SetupForHPSDRModel is not called on plain startup.
         private void ApplySunSDRSpecificUI()
         {
-            if (HardwareSpecific.Model != HPSDRModel.SUNSDR2DX) return;
+            // Family-level gate. Use HardwareSpecific.Model (set early during
+            // HardwareSpecific construction, before network IO opens) — NOT
+            // NetworkIO.CurrentRadioProtocol, which isn't reliably set at the
+            // UI-setup phase when this method first runs. Using the protocol
+            // here causes the function to early-return during initial paint,
+            // leaving 2TON/DUP/PS-A visible and the 2m band button disabled.
+            //
+            // When SunSDR2 Pro / MB1 / future siblings are added to HPSDRModel,
+            // OR-extend the check below. The family-wide UI hardening below
+            // is safe for any SunSDR variant; only the DX-specific 2m band
+            // and MaxFreq settings stay gated on the precise model further
+            // down.
+            bool isSunSDRFamily = HardwareSpecific.Model == HPSDRModel.SUNSDR2DX;
+            if (!isSunSDRFamily) return;
 
+            // ─── SunSDR family-wide UI hardening (any SunSDR radio) ──────────
+
+            // PS-A: PureSignal pre-distorter is Anan-only (requires the radio's
+            // bidirectional ADC feedback path); SunSDR wire protocol has no
+            // equivalent. Hide entirely on any SunSDR.
             if (chkFWCATUBypass.Checked)
                 chkFWCATUBypass.Checked = false;
             chkFWCATUBypass.Enabled = false;
+            chkFWCATUBypass.Visible = false;
             if (psform != null)
             {
                 psform.AutoCalEnabled = false;
                 psform.PSEnabled = false;
             }
+            // 2TON: requires PS-A path; not supported on any SunSDR.
             if (chk2TONE.Checked)
                 chk2TONE.Checked = false;
             chk2TONE.Enabled = false;
+            chk2TONE.Visible = false;
+            // DUP: inert on SunSDR family (the radio's MOX shutdown bypass and
+            // RX LO suppression don't expose a duplex path through the wire
+            // protocol).
             if (chkRX2SR.Checked)
                 chkRX2SR.Checked = false;
             chkRX2SR.Enabled = false;
+            chkRX2SR.Visible = false;
+
+            // With 2TON/DUP/PS-A hidden, compact the panelOptions button stack:
+            //   row 1 (y=7)  MON | TUN          (unchanged)
+            //   row 2 (y=30) MOX | xPA          (xPA moved up from y=76)
+            //   row 3 (y=53) REC | PLAY         (moved up from y=99)
+            chkExternalPA.Location = new System.Drawing.Point(59, 30);
+            ckQuickRec.Location   = new System.Drawing.Point(8,  53);
+            ckQuickPlay.Location  = new System.Drawing.Point(59, 53);
 
             // Hide Anan-only Hardware Options (Mic Tip/Ring, Bias, XLR/3.5mm,
             // Alex matrix, Apollo). PTT Off/On stays visible — reserved for
-            // upcoming SunSDR hardware-PTT support.
+            // SunSDR hardware-PTT support. None of these have analogues in
+            // any SunSDR variant.
             if (!IsSetupFormNull)
                 SetupForm.SetAnanHardwareOptionsVisible(false);
 
-            radBand2.Text = "2";
-            radBand2.Enabled = true;
-            // MaxFreq is the hard VFO ceiling — it limits how high you can
-            // tune the receiver, NOT what you can transmit on. TX is gated
-            // separately by ham-band / region logic. SunSDR2 DX is spec'd
-            // for RX on antenna A1 up to 420 MHz (covers FM broadcast, 2m,
-            // airband, 220, 70cm). Open the ceiling to the hardware max.
-            if (MaxFreq < SUNSDR_MAX_RX_FREQ_MHZ)
-                MaxFreq = SUNSDR_MAX_RX_FREQ_MHZ;
-
-            // InitFilterPresets now seeds FM filter presets, but a saved
-            // database from a pre-fix build has blank FM entries that
-            // the DB-load path will have copied back over our defaults.
-            // Restore the FM presets if they came back blank.
+            // InitFilterPresets seeds FM filter presets, but a saved database
+            // from a pre-fix build can have blank FM entries that the DB-load
+            // path copies back over the defaults. Restore the FM presets if
+            // they came back blank. Mode-dependent, applies to any SunSDR on FM.
             EnsureFMFilterPresets(rx1_filters);
             EnsureFMFilterPresets(rx2_filters);
-
-            // SetRX1Mode was already called earlier in startup with the
-            // stale DB-restored names, so the filter button captions are
-            // pinned to whatever the DB had. Force a refresh so labels
-            // match the re-seeded preset table.
             if (_rx1_dsp_mode == DSPMode.FM)
                 RefreshFMFilterButtonLabels(true);
             if (_rx2_dsp_mode == DSPMode.FM)
                 RefreshFMFilterButtonLabels(false);
+
+            // ─── SunSDR2 DX model-specific (Pro / siblings will need their own gates) ──
+
+            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
+            {
+                // 2m band button — DX has VHF on antenna A1. Pro band coverage
+                // differs and will be set in its own model branch when added.
+                radBand2.Text = "2";
+                radBand2.Enabled = true;
+                // MaxFreq is the hard VFO ceiling — limits how high you can
+                // tune RX, NOT TX (TX gated separately). SunSDR2 DX is spec'd
+                // for RX on antenna A1 up to 420 MHz. Pro has a different
+                // RX ceiling and will get its own constant.
+                if (MaxFreq < SUNSDR_MAX_RX_FREQ_MHZ)
+                    MaxFreq = SUNSDR_MAX_RX_FREQ_MHZ;
+            }
         }
 
         private void RefreshFMFilterButtonLabels(bool rx1)
@@ -28328,6 +28363,73 @@ namespace Thetis
                     // still disabled until user toggles the button twice.
                     if (chkExternalPA.Checked)
                         NetworkIO.nativeSunSDRSetPA(1);
+
+                    // Re-assert RX/TX antennas now that the radio is powered.
+                    // SunSDRInit (called during NetworkIO setup as part of
+                    // power-on) memsets the entire `sdr` struct and resets
+                    // sdr.currentRxAntenna/currentTxAntenna to 1 (= wire byte
+                    // 0x01 = physical A2 on HF). SunSDRPowerOn then applies
+                    // those defaults to the wire, leaving the radio on A2
+                    // for both directions even though the UI shows the user's
+                    // saved selection from the database.
+                    //
+                    // Push the saved per-band antennas now (radio is up,
+                    // sdr.powered=1, wire commands actually go through), using
+                    // the same direct nativeSunSDRSet{Rx,Tx}Antenna pattern
+                    // the band-switch handler at console.cs:46921 uses.
+                    // Push TX first (cached for next MOX), RX last so the live
+                    // wire selection lands on the RX antenna.
+                    if (!IsSetupFormNull)
+                    {
+                        SunSdrAntenna txAnt = (SunSdrAntenna)SetupForm.GetTXAntenna(_tx_band);
+                        int txWire = SunSdrAntennaSpec.WireValueFor(txAnt, _tx_band, true);
+                        if (txWire > 0)
+                        {
+                            powerOnLog($"Re-assert TX antenna: band={_tx_band} ant={txAnt} wire={txWire}");
+                            NetworkIO.nativeSunSDRSetTxAntenna(txWire);
+                        }
+
+                        SunSdrAntenna rxAnt = (SunSdrAntenna)SetupForm.GetRXAntenna(RX1Band);
+                        int rxWire = SunSdrAntennaSpec.WireValueFor(rxAnt, RX1Band, false);
+                        if (rxWire > 0)
+                        {
+                            powerOnLog($"Re-assert RX antenna: band={RX1Band} ant={rxAnt} wire={rxWire}");
+                            NetworkIO.nativeSunSDRSetAntenna(rxWire);
+                        }
+                    }
+
+                    // Re-assert other state that SunSDRInit/SunSDRPowerOn
+                    // resets to non-trivial defaults (sentinels or 0). Same
+                    // bug class as antenna/PA/preamp/mic-source above —
+                    // SunSDRInit's `memset(&sdr, 0, ...)` clobbers any value
+                    // C# cached pre-Power-On, and SunSDRPowerOn re-resets a
+                    // few fields. Push them now while the radio is up so the
+                    // wire state actually reflects the user's saved settings.
+
+                    // Mode: SunSDRPowerOn resets sdr.currentMode to -1
+                    // ("needs to be set" sentinel). Push the current RX1
+                    // demod mode so the radio's bandpass / mode-specific
+                    // tuning matches what the UI shows.
+                    NetworkIO.nativeSunSDRSetMode((int)RX1DSPMode);
+                    powerOnLog($"Re-assert mode: RX1DSPMode={RX1DSPMode}");
+
+                    // RX2 enable: SunSDRPowerOn captures desired_rx2 from
+                    // sdr.currentRX2Enabled BEFORE resetting it to 0, then
+                    // calls SunSDRSetRX2 if non-zero. That works only if C#
+                    // pushed RX2 state between SunSDRInit and SunSDRPowerOn.
+                    // Re-assert defensively in case the timing slips.
+                    NetworkIO.nativeSunSDRSetRX2(rx2_enabled ? 1 : 0);
+                    powerOnLog($"Re-assert RX2: enabled={rx2_enabled}");
+
+                    // VFO frequencies: SunSDRPowerOn resets currentRx1FreqHz
+                    // / currentRx2FreqHz / currentTxFreqHz to 0. Push current
+                    // VFO values so the radio is definitely on the saved
+                    // frequencies. Same VFOfreq wrapper the band-switch
+                    // handler uses (console.cs:46950).
+                    NetworkIO.VFOfreq(0, RX1DDSFreq, 0);
+                    if (rx2_enabled)
+                        NetworkIO.VFOfreq(3, RX2DDSFreq, 0);
+                    powerOnLog($"Re-assert VFO: RX1={RX1DDSFreq} MHz, RX2={(rx2_enabled ? RX2DDSFreq.ToString() : "off")} MHz");
 
                     // Re-assert the preamp/ATT state to whatever the combo
                     // shows. The startup macro always sends 0x05=0x83 (+10 dB

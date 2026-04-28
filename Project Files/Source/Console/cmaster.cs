@@ -2066,7 +2066,32 @@ namespace Thetis
                 {
                     try
                     {
-                        int size = 2048;    // could check actual size, depending upon MOX
+                        // RX side: use the radio's actual per-call block size,
+                        // NOT a hardcoded 2048. GetPlayBuffer only fills the
+                        // first rcvr_size samples of the local pleft/pright
+                        // arrays. Swizzling 2048 wrote 1423 stale leftover
+                        // samples into pcm->in[0] alongside the real WAV
+                        // samples — symptom: panadapter showed constant
+                        // carrier-like spurs from the static leftover data
+                        // when playing IQ recordings.
+                        //
+                        // TX side: keep the original 2048 hardcode for now.
+                        // Narrowing TX side to xmtr_size caused robotic TX
+                        // monitor audio in a regression we haven't fully
+                        // traced — leave as-was until we understand the TX
+                        // pipeline's downstream consumers of the wider
+                        // buffer window.
+                        int size;
+                        if (state == 0)
+                        {
+                            int rate = cmaster.GetInputRate(0, id);
+                            size = cmaster.GetBuffSize(rate);
+                            if (size <= 0 || size > left.Length) size = left.Length;
+                        }
+                        else
+                        {
+                            size = 2048;
+                        }
                         fixed (float* pleft = &left[0])
                         fixed (float* pright = &right[0])
                         {
@@ -2153,6 +2178,16 @@ namespace Thetis
                     {
                         fixed (float* pleft = &left[0], pright = &right[0], pltemp = &ltemp[0], prtemp = &rtemp[0])
                         {
+                            // RESAMPLER NULL GUARDS:
+                            // WaveFileWriter ctor only creates the resamplers
+                            // when source/target rates are an integer ratio
+                            // (see clsAudioRecordPlayback.cs::IsIntegerRatio).
+                            // For non-integer-ratio cases the resamplers are
+                            // null. WDSP.xresampleFV called with a null void*
+                            // is a native AV (process crash). When the rate
+                            // path needs a resampler we don't have, skip the
+                            // AddWriteBuffer for this block — the recording
+                            // simply doesn't capture that side this iteration.
                             if (pos == 0)   // calling from the "pre" location
                             {
                                 if ((state == 0) && rxpre)  // getting receive data and want receive data for 'pre' position
@@ -2162,10 +2197,15 @@ namespace Thetis
                                     deswizzle(rcvr_insize, data, pleft, pright);
                                     if (WaveThing.wave_file_writer[id].BaseRate != rcvr_inrate)
                                     {
-                                        int outsamps;
-                                        WDSP.xresampleFV(pleft, pltemp, rcvr_insize, &outsamps, WaveThing.wave_file_writer[id].RcvrResampL);
-                                        WDSP.xresampleFV(pright, prtemp, rcvr_insize, &outsamps, WaveThing.wave_file_writer[id].RcvrResampR);
-                                        WaveThing.wave_file_writer[id].AddWriteBuffer(pltemp, prtemp, outsamps);
+                                        void* rL = WaveThing.wave_file_writer[id].RcvrResampL;
+                                        void* rR = WaveThing.wave_file_writer[id].RcvrResampR;
+                                        if (rL != null && rR != null)
+                                        {
+                                            int outsamps;
+                                            WDSP.xresampleFV(pleft, pltemp, rcvr_insize, &outsamps, rL);
+                                            WDSP.xresampleFV(pright, prtemp, rcvr_insize, &outsamps, rR);
+                                            WaveThing.wave_file_writer[id].AddWriteBuffer(pltemp, prtemp, outsamps);
+                                        }
                                     }
                                     else
                                         WaveThing.wave_file_writer[id].AddWriteBuffer(pleft, pright, rcvr_insize);
@@ -2177,10 +2217,15 @@ namespace Thetis
                                     deswizzle(xmtr_insize, data, pleft, pright);
                                     if (WaveThing.wave_file_writer[id].BaseRate != xmtr_inrate)
                                     {
-                                        int outsamps;
-                                        WDSP.xresampleFV(pleft, pltemp, xmtr_insize, &outsamps, WaveThing.wave_file_writer[id].XmtrResampL);
-                                        WDSP.xresampleFV(pright, prtemp, xmtr_insize, &outsamps, WaveThing.wave_file_writer[id].XmtrResampR);
-                                        WaveThing.wave_file_writer[id].AddWriteBuffer(pltemp, prtemp, outsamps);
+                                        void* xL = WaveThing.wave_file_writer[id].XmtrResampL;
+                                        void* xR = WaveThing.wave_file_writer[id].XmtrResampR;
+                                        if (xL != null && xR != null)
+                                        {
+                                            int outsamps;
+                                            WDSP.xresampleFV(pleft, pltemp, xmtr_insize, &outsamps, xL);
+                                            WDSP.xresampleFV(pright, prtemp, xmtr_insize, &outsamps, xR);
+                                            WaveThing.wave_file_writer[id].AddWriteBuffer(pltemp, prtemp, outsamps);
+                                        }
                                     }
                                     else
                                         WaveThing.wave_file_writer[id].AddWriteBuffer(pleft, pright, xmtr_insize);
@@ -2202,10 +2247,15 @@ namespace Thetis
                                     deswizzle(rcvr_outsize, data, pleft, pright);
                                     if (WaveThing.wave_file_writer[id].BaseRate != rcvr_outrate)
                                     {
-                                        int outsamps;
-                                        WDSP.xresampleFV(pleft, pltemp, rcvr_outsize, &outsamps, WaveThing.wave_file_writer[id].RcvrResampL);
-                                        WDSP.xresampleFV(pright, prtemp, rcvr_outsize, &outsamps, WaveThing.wave_file_writer[id].RcvrResampR);
-                                        WaveThing.wave_file_writer[id].AddWriteBuffer(pltemp, prtemp, outsamps);
+                                        void* rL = WaveThing.wave_file_writer[id].RcvrResampL;
+                                        void* rR = WaveThing.wave_file_writer[id].RcvrResampR;
+                                        if (rL != null && rR != null)
+                                        {
+                                            int outsamps;
+                                            WDSP.xresampleFV(pleft, pltemp, rcvr_outsize, &outsamps, rL);
+                                            WDSP.xresampleFV(pright, prtemp, rcvr_outsize, &outsamps, rR);
+                                            WaveThing.wave_file_writer[id].AddWriteBuffer(pltemp, prtemp, outsamps);
+                                        }
                                     }
                                     else
                                         WaveThing.wave_file_writer[id].AddWriteBuffer(pleft, pright, rcvr_outsize);
@@ -2217,10 +2267,15 @@ namespace Thetis
                                     deswizzle(xmtr_outsize, data, pleft, pright);
                                     if (WaveThing.wave_file_writer[id].BaseRate != xmtr_outrate)
                                     {
-                                        int outsamps;
-                                        WDSP.xresampleFV(pleft, pltemp, xmtr_outsize, &outsamps, WaveThing.wave_file_writer[id].XmtrResampL);
-                                        WDSP.xresampleFV(pright, prtemp, xmtr_outsize, &outsamps, WaveThing.wave_file_writer[id].XmtrResampR);
-                                        WaveThing.wave_file_writer[id].AddWriteBuffer(pltemp, prtemp, outsamps);
+                                        void* xL = WaveThing.wave_file_writer[id].XmtrResampL;
+                                        void* xR = WaveThing.wave_file_writer[id].XmtrResampR;
+                                        if (xL != null && xR != null)
+                                        {
+                                            int outsamps;
+                                            WDSP.xresampleFV(pleft, pltemp, xmtr_outsize, &outsamps, xL);
+                                            WDSP.xresampleFV(pright, prtemp, xmtr_outsize, &outsamps, xR);
+                                            WaveThing.wave_file_writer[id].AddWriteBuffer(pltemp, prtemp, outsamps);
+                                        }
                                     }
                                     else
                                         WaveThing.wave_file_writer[id].AddWriteBuffer(pleft, pright, xmtr_outsize);
