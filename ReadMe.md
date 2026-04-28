@@ -2,13 +2,22 @@
 
 *Open source. Native protocol. Dedicated to Artemis II.*
 
-**Current version: v2.0.13**
+**Current version: v2.0.14**
 
 ⬇️ [**Download Latest Release**](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  📘 [**Quick Start Guide**](START_HERE_SUNSDR2DX.md)  ·  📝 [What's new](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  💬 [Discussions](https://github.com/kk68/ArtemisSDR/discussions)  ·  🐛 [Issues](https://github.com/kk68/ArtemisSDR/issues)
 
-### What's new in v2.0.13
+### What's new in v2.0.14
 
-- **cmASIO is back under Setup → Audio.** A direct, low-latency ASIO output path (bypassing VAC + PortAudio) for users with an ASIO-capable interface (MOTU, RME, Focusrite, etc.). The cmASIO tab was hidden in upstream Thetis and never wired correctly for SunSDR; it now appears unconditionally and starts correctly on the SunSDR's 312.5 kHz native rate.
+- **ADC-Overload (OVL) indicator.** A red **ADC-Overload** lamp now appears in the upper-right corner of the panadapter's info strip when the radio's ADC is being saturated by a strong nearby signal. When you see it, lower ATT (try 0 dB, then -10 / -20 dB) until it clears. **Important context:** this is a *diagnostic aid for a radio-side hardware limit*, not a software fix. The SunSDR2 DX's direct-sampling ADC has a finite dynamic range; if a nearby station is strong enough to drive that ADC into clip, no software can recover the original signal — the digital samples coming out of the radio are already saturated. Artemis just tells you it's happening so you can act. See [Strong-signal behavior, OVL, and "ghost" spurs](#strong-signal-behavior-ovl-and-ghost-spurs) below for the full picture. The lamp re-uses the now-disabled PureSignal2 / FB labels (PS-A is hardware-dead on SunSDR), so no real estate was added to the UI.
+- **cmASIO TX path fixed.** cmASIO TX previously produced robotic / chopped audio while RX through cmASIO was clean. Root cause was a block-size mismatch (cmASIO was supplying 96 samples per period while the SunSDR TX path consumes 64); the rmatch resampler is now created with asymmetric sizes for the SunSDR's non-integer sample-rate ratio. cmASIO TX is now clean end-to-end.
+- **Settings persistence on Power-On.** Several radio-side settings were silently reset to hardware defaults during the Power-On sequence (RX antenna, TX antenna, mode, RX2 enable, VFO A/B frequency). The UI showed your saved value, but the radio would be back on a default. Fixed by re-asserting all of these immediately after Power-On completes — what you see in the UI is now what the radio is actually set to.
+- **WAV recorder safety against extreme sample-rate ratios.** Picking 312500 Hz in the WAV recorder/player rate dropdown previously crashed Artemis (and could take Windows with it) when the resampler tried to build a 625-phase polyphase bank. The recorder now refuses to build a resampler for non-integer ratios and records at the source's native rate instead.
+- **IQ Quick Playback panadapter cleanup.** The RX-side replay path was using a hardcoded 2048-sample buffer regardless of the active block size, which caused stale-data carrier spurs on the panadapter during playback. Now uses the runtime block size — playback panadapter matches the original recording.
+- **MON button grayed.** TX-monitor audio routing on SunSDR has a long-standing issue — silent through VAC paths, robotic through cmASIO. RF transmit is unaffected; only the local monitor playback is broken. The button is now grayed and the audio routing is hard-blocked while we root-cause the SunSDR-specific routing properly. We'll re-enable when fixed.
+
+### About cmASIO
+
+cmASIO is a direct, low-latency ASIO output path (bypassing VAC + PortAudio) for users with an ASIO-capable interface (MOTU, RME, Focusrite, etc.). The cmASIO tab is under **Setup → Audio** and works with the SunSDR's 312.5 kHz native rate.
 
 ### Why cmASIO instead of VAC + ASIO?
 
@@ -17,7 +26,7 @@ VAC + ASIO and cmASIO both end up at the same ASIO driver, but the signal chains
 | Path | Pipeline |
 |---|---|
 | **VAC + ASIO driver** (the `Driver: ASIO` option on the VAC1/VAC2 tab) | WDSP audio → VAC virtual cable → ring buffer → **PortAudio** → PortAudio's ASIO host wrapper → ASIO driver → hardware |
-| **cmASIO** (the new tab) | WDSP audio → ChannelMaster → **native Steinberg ASIO SDK direct** → ASIO driver → hardware |
+| **cmASIO** | WDSP audio → ChannelMaster → **native Steinberg ASIO SDK direct** → ASIO driver → hardware |
 
 What you get with cmASIO that you don't get with VAC + ASIO:
 
@@ -29,7 +38,7 @@ When **VAC + ASIO is the right choice instead:** if you need VAC to feed digital
 
 ### How to configure cmASIO
 
-1. Open **Setup → Audio → cmASIO** (the new last sub-tab).
+1. Open **Setup → Audio → cmASIO**.
 2. Pick your ASIO device from **Available ASIO Device(s)**.
 3. Choose your **IN pair** and **OUT pair** (channel pairs your interface exposes — e.g. `ch1 + 2`).
 4. Pick **MIC source** (Left, Right, or Both).
@@ -73,9 +82,9 @@ Distributed free of charge under the GNU General Public License v2 for the amate
 - [Who this is for](#who-this-is-for)
 - [What works](#what-works)
 - [Current limitations](#current-limitations)
+- [Strong-signal behavior, OVL, and "ghost" spurs](#strong-signal-behavior-ovl-and-ghost-spurs)
 - [Privacy & network activity](#privacy--network-activity)
 - [Getting started](#getting-started)
-- [TX power calibration per band](#tx-power-calibration-per-band)
 - [Troubleshooting](#troubleshooting)
 - [Building from source](#building-from-source)
 - [For contributors](#for-contributors)
@@ -128,7 +137,7 @@ If you're brand new to SDR or to your radio, work through your radio's official 
 - The full WDSP-based DSP stack inherited from Thetis: NR, NR4, ANF, NB/NB2, EQ, CESSB, CFC, notch, compander — everything works
 - VAC audio routing (CABLE, VoiceMeeter, etc.) works on both RX and TX
 - Clean Power off / Power on cycling from the ArtemisSDR UI
-- Proper `PA Gain By Band` and per-drive offsets integration — calibrate the way you'd calibrate any Thetis-family radio
+- Proper `PA Gain By Band` and per-drive offsets integration — calibrate the way you would in Thetis
 
 ## Current limitations
 
@@ -138,13 +147,44 @@ Honest list of what's partially done or missing. None of these prevent normal op
 | --- | --- |
 | **TX power calibration** | 40 m is locked. 2m is calibrated against the radio's own 2m PA ADC. Other HF bands fall back to the 40 m curve — expect a few dB deviation until separately calibrated. |
 | **`Fwd Pwr` meter** | Live and calibrated on HF and 2m. Reads from the radio's 0x1F telemetry. Other bands' absolute watt readings inherit the HF calibration curve. |
-| **PS-A, 2-TONE, DUP** | Grayed out on SunSDR. These depend on a feedback-loop path the radio doesn't expose; not a bug, a hardware-architecture constraint. |
+| **PS-A, 2-TONE, DUP** | Grayed out on SunSDR — the radio doesn't expose a feedback-loop path. Not a bug, a hardware-architecture constraint. The PS-A label area in the panadapter info strip is now repurposed as the ADC-Overload lamp. |
+| **ADC overload + analog front-end IMD ("ghost" spurs)** | Hardware limit of the radio, not Artemis. ADC clipping is now flagged by the ADC-Overload lamp; smaller "ghost" spurs near a strong carrier are analog-domain mixer products that no software can remove. Same behavior reproduces on ExpertSDR3 against the same radio. Cure is to reduce front-end gain (ATT). See [Strong-signal behavior, OVL, and "ghost" spurs](#strong-signal-behavior-ovl-and-ghost-spurs). |
 | **Diversity mode** | Unsupported. RX2 follows RX1's antenna selection; no independent per-receiver antenna path has been found. |
-| **MON / DUP audio routing** | Not fully settled during TX. If you need to monitor your own transmission, a second receiver is the reliable path. |
+| **MON button** | Grayed in v2.0.14. Long-standing TX-monitor routing issue on SunSDR — silent through VAC, robotic through cmASIO. RF TX is unaffected; only local monitor playback. Use a second receiver if you need to monitor your own transmission until we re-enable MON in a future release. |
 | **Occasional post-TX raspy audio** | Intermittent; cycling VAC clears it. Tracked as a polish item. |
-| **Robotic / garbled audio on cold start** | Intermittent; Power-cycle (Power off → Power on) clears it. Under investigation. |
 | **Rare crash on app exit after band changes** | Heap corruption surfaces during teardown (`0xc0000374`). No data loss — settings, memories, and recordings are flushed atomically before exit. Under investigation. |
 | **MUT button on the front panel** | Does not mute. Long-standing inherited bug from upstream Thetis; predates ArtemisSDR. Use VAC mute or the audio device mute. |
+
+## Strong-signal behavior, OVL, and "ghost" spurs
+
+**Short version: if a contest-strength signal is near you, you may see extra spurs on the panadapter or hear distortion in the audio. That is the radio's analog front end being pushed past its dynamic range. It is a hardware limit of any direct-sampling SDR, not an Artemis bug. Artemis cannot fix it from software — but it now warns you when it's happening (the ADC-Overload lamp), and the cure is the same as on every other SDR client: reduce front-end gain.**
+
+The longer explanation, in case you want to know exactly what you're seeing.
+
+### Two different things that look similar
+
+A strong nearby signal can show up as two visually-similar but mechanistically-different problems on the panadapter:
+
+| What you see | What's actually happening | What to do |
+|---|---|---|
+| **Audio gets distorted / panadapter looks "fuzzy" near a strong carrier; the ADC-Overload lamp lights up** | The radio's ADC is clipping. Samples coming out of the radio are already saturated — the digital data is wrong before Artemis ever sees it. | Lower ATT (preamp off, then 0 dB, then -10 / -20 dB) until the ADC-Overload lamp clears. |
+| **Smaller "ghost" copies of a strong carrier appear at fixed offsets (often ±100 kHz, ±125 kHz, etc.)** even when the ADC-Overload lamp is dark | The radio's analog front end (LNA, mixer, post-mixer amp) is producing intermodulation products on the strong signal, *before* the ADC. The ADC isn't clipping — but the front-end mixer's nonlinearity is creating the ghosts. | Same answer: reduce front-end gain. The ratio between the carrier and the ghosts will improve, up to the front end's dynamic-range limit. Past that point, the ghosts drop with the carrier and ratio stops improving — that's a hardware ceiling. |
+
+Both of these are **the radio**, not Artemis. The IQ samples Artemis receives over the wire are exactly the samples ExpertSDR3 receives — we run the same wire protocol against the same hardware. **We have verified this directly: the same radio, on the same antenna, at the same gain settings, shows the same spurs and the same overload behavior under ExpertSDR3.** No SDR client can software its way out of a saturated ADC or a non-linear mixer; that requires changing the analog gain in front of those stages, which is what the ATT control on the radio does.
+
+### What the ADC-Overload lamp actually detects
+
+The lamp watches the histogram of incoming wire-IQ samples and lights up when too many of them are clustered against the ADC's digital ceiling — the textbook signature of an ADC at the edge of its dynamic range. (We don't compare against a fixed amplitude threshold, because the SunSDR's wire IQ is internally scaled so a fixed dB threshold misses the actual saturation event.) When the lamp is dark, the ADC is *not* saturating — that doesn't mean the front end is linear; it just means the sampler isn't clipping.
+
+### Why this isn't "fixable" in Artemis
+
+We considered adding a separate detector for the analog-IMD ("ghost spur") case. The honest answer is that there's no software action to take when it fires — the signal you'd want to *recover* never made it through the analog chain in the first place. The operator already sees the spurs in the panadapter; flagging them with a second lamp would be cosmetic. The OVL lamp is genuinely useful because the ADC saturation event is *not* obvious from the panadapter alone (the panadapter just shows the saturated signal as if it were normal).
+
+### Practical guidance
+
+- If you operate near contest-strength stations: run with ATT engaged. The SunSDR's preamp gain is mostly useful when listening for very weak signals on a quiet band; on a busy band with strong locals, you do not want it on.
+- If you see the ADC-Overload lamp during normal operation (not contest conditions): something nearby is unusually strong — investigate (close-by 2 m repeater, broadcast carrier, etc.) before suspecting Artemis.
+- If you see ghost spurs but the lamp is dark: the radio's mixer is being pushed by a strong signal. Same answer (more ATT), with the caveat that there's an analog-domain floor you can't get under.
 
 ## Privacy & network activity
 
@@ -182,11 +222,9 @@ Short version:
 
 **Audio is garbled or robotic after a TX cycle.** Cycle VAC off and on from its sidebar (the "Enable VAC" checkbox). This clears a transient that can linger in some TX → RX transitions.
 
+**Red "ADC-Overload" lamp lights up on the panadapter, or you see ghost copies of a strong nearby signal.** This is the radio's hardware front end being pushed past its dynamic range — not an Artemis bug. Reduce ATT (preamp off → 0 dB → -10 dB → -20 dB) until the lamp clears. Smaller "ghost" spurs that remain after the lamp has cleared are analog mixer products inside the radio; the same radio shows them under ExpertSDR3 at the same gain settings. See [Strong-signal behavior, OVL, and "ghost" spurs](#strong-signal-behavior-ovl-and-ghost-spurs) for the full explanation.
+
 **App crashes when you change the audio driver in Setup → Audio while running.** Known issue, pre-existing. Select your audio driver once at startup and leave it for the session. If you need to change it, close ArtemisSDR first, then reopen with the new driver selected.
-
-**Signals on the panadapter look unusually wide, audio quality is off, right after startup.** Rare, but seen. Power-cycle ArtemisSDR (Power off → Power on) to re-initialize the RX DSP.
-
-**`Fwd Pwr` meter reads zero.** Expected for now. The meter isn't wired to SunSDR forward-power telemetry yet — use an external wattmeter. This is the next planned feature.
 
 ## Building from source
 
@@ -214,7 +252,7 @@ Deeper architecture notes, opcode tables, TX power-calibration design, VAC under
 
 Protocol-level reverse-engineering documentation is maintained in a separate private repository. If you're contributing at the wire-protocol level and need access, reach out directly.
 
-Contributions welcome: bug fixes, per-band calibration data, UI polish, completion of the open limitations. Pull requests against `feature/sunsdr2dx` please.
+Contributions welcome: bug fixes, per-band calibration data, UI polish, completion of the open limitations. Pull requests against `main` please.
 
 ## License
 

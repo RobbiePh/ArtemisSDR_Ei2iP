@@ -6663,6 +6663,21 @@ namespace Thetis
                 chk2TONE.Checked = false;
             chk2TONE.Enabled = false;
             chk2TONE.Visible = false;
+            // MON: TX-monitor audio path is broken on SunSDR — silent on
+            // VAC paths, robotic on cmASIO. Long-standing, not a recent
+            // regression. Architectural issue with the SunSDR-specific
+            // audio routing (audio output forced through cmASIO; MON tap
+            // not re-clocked off WDSP TX's native cadence). RF TX is
+            // unaffected — only the local monitor playback. Grayed out
+            // until we root-cause the routing properly.
+            if (chkMON.Checked)
+                chkMON.Checked = false;
+            chkMON.Enabled = false;
+            // PS-A is dead on SunSDR — repurpose the InfoBar's FB / Pure-Signal2
+            // labels (top-right of the panadapter strip) as the ADC-overload (OVL)
+            // lamp. lblFB is hidden, lblPS becomes the OVL display.
+            if (infoBar != null)
+                infoBar.EnterSunSDROvlMode();
             // DUP: inert on SunSDR family (the radio's MOX shutdown bypass and
             // RX LO suppression don't expose a duplex path through the wire
             // protocol).
@@ -21525,8 +21540,15 @@ namespace Thetis
 
         private void hwPttPollTimer_Tick(object sender, EventArgs e)
         {
-            // Only act on SunSDR with radio powered + hw PTT enabled.
+            // SunSDR-only timer. Two responsibilities sharing a single 10 Hz tick:
+            //   (1) ADC overload indicator — always polled (independent of hw PTT)
+            //   (2) Hardware PTT edge detection — gated on mic_ptt_disabled
             if (NetworkIO.CurrentRadioProtocol != RadioProtocol.SUNSDR) return;
+
+            // (1) ADC overload — poll regardless of chkPower so the lamp clears
+            // promptly on power-off.
+            pollAdcOverload();
+
             if (!chkPower.Checked) return;
             if (mic_ptt_disabled) return;
 
@@ -21549,6 +21571,23 @@ namespace Thetis
             bool wantMox = (cur == 1);
             if (chkMOX.Checked != wantMox)
                 chkMOX.Checked = wantMox;
+        }
+
+        // ADC-overload poll. Reads the native flag set by the sunsdr.c read
+        // thread (ceiling-clustering signature in the wire IQ histogram).
+        // Drives the OVL lamp on the InfoBar (lblPS, repurposed in
+        // EnterSunSDROvlMode). The lamp clears automatically when chkPower is
+        // off because the native read returns 0 with no live samples.
+        private void pollAdcOverload()
+        {
+            bool active = false;
+            if (chkPower.Checked)
+            {
+                try { active = NetworkIO.nativeSunSDRGetAdcOverload() != 0; }
+                catch { active = false; }
+            }
+            if (infoBar != null)
+                infoBar.Overload = active;
         }
 
         private string current_skin = "Default";
@@ -30163,6 +30202,28 @@ namespace Thetis
 
         private void chkMON_CheckedChanged(object sender, System.EventArgs e)
         {
+            // SUNSDR: TX-monitor audio path is broken (silent on VAC, robotic
+            // on cmASIO). Long-standing, not a recent regression. Until we
+            // root-cause the routing, force MON off and hard-block the audio
+            // routing call — mode-switch handlers can still flip chkMON.Enabled
+            // back on, and if any of them set chkMON.Checked = true programmatically
+            // we don't want Audio.MON = true to fire and route broken audio.
+            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
+            {
+                if (chkMON.Checked)
+                {
+                    // Bounce it back off without recursing through the side
+                    // effects (paint, BackColor, sidetone sync). Setting
+                    // Checked = false re-enters this handler — the Audio.MON
+                    // assignment below is the authoritative gate, so the
+                    // re-entry is harmless (Audio.MON is already false).
+                    chkMON.Checked = false;
+                }
+                Audio.MON = false;
+                chkMON.BackColor = SystemColors.Control;
+                return;
+            }
+
             bool oldMON = Audio.MON;
 
             Audio.MON = chkMON.Checked;

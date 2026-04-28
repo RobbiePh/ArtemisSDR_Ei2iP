@@ -424,6 +424,9 @@ namespace Thetis
         [DllImport("ChannelMaster.dll", CallingConvention = CallingConvention.Cdecl)]
         public static extern int nativeSunSDRGetHwPttState();
 
+        [DllImport("ChannelMaster.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int nativeSunSDRGetAdcOverload();
+
         [DllImport("ChannelMaster.dll", CharSet = CharSet.Ansi, CallingConvention = CallingConvention.Cdecl)]
         public static extern void nativeSunSDRLogTuneState(String label, int chk_tun, int chk_mox, int tuning, int mox,
             int tx_dsp_mode, int current_dsp_mode, int postgen_run, int postgen_mode,

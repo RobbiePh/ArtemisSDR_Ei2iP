@@ -167,6 +167,16 @@ typedef struct _sunsdr_state
      * 0 = released, 1 = pressed. Updated on every telemetry packet by
      * the read thread; polled by C# via nativeSunSDRGetHwPttState(). */
     volatile LONG hwPttState;
+
+    /* ADC-overload indicator. 1 = at least one IQ sample exceeded the
+     * clipping threshold (|sample| > 0.95 of full scale) within the
+     * last ~2 seconds; 0 = clean. Set by the read thread per-packet
+     * and held for ~1000 packets (~2 s) so the UI lamp doesn't flicker
+     * on transient single-packet events. Polled by C# via
+     * nativeSunSDRGetAdcOverload(). At ATT +10 with strong signals the
+     * direct-sample ADC saturates and creates IMD spurs (radio-side,
+     * same on EESDR3); this flag tells the operator to drop ATT. */
+    volatile LONG adcOverloadActive;
     int lastTxWasTune;
     int pendingTuneReleaseConfig;
     int powered;
@@ -212,6 +222,7 @@ void SunSDRSetTune(int tune);
 void SunSDRSetPreampAtt(int state);
 void SunSDRSetMicSource(int state);
 int  SunSDRGetHwPttState(void);
+int  SunSDRGetAdcOverload(void);
 void SunSDRLogTuneState(const char* label, int chk_tun, int chk_mox, int tuning, int mox,
     int tx_dsp_mode, int current_dsp_mode, int postgen_run, int postgen_mode,
     double tone_freq, double tone_mag, int pulse_enabled, int pulse_on,

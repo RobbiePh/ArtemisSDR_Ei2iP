@@ -5394,17 +5394,17 @@
             this.toolStripStatusLabel_CatSerial.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Image;
             this.toolStripStatusLabel_CatSerial.Name = "toolStripStatusLabel_CatSerial";
             this.toolStripStatusLabel_CatSerial.Overflow = System.Windows.Forms.ToolStripItemOverflow.Never;
-            // 
+            //
             // toolStripStatusLabel_CMstatus
-            // 
+            //
             resources.ApplyResources(this.toolStripStatusLabel_CMstatus, "toolStripStatusLabel_CMstatus");
             this.toolStripStatusLabel_CMstatus.DisplayStyle = System.Windows.Forms.ToolStripItemDisplayStyle.Image;
             this.toolStripStatusLabel_CMstatus.Image = global::Thetis.Properties.Resources.cm_red;
             this.toolStripStatusLabel_CMstatus.Name = "toolStripStatusLabel_CMstatus";
             this.toolStripStatusLabel_CMstatus.Overflow = System.Windows.Forms.ToolStripItemOverflow.Never;
-            // 
+            //
             // toolStripStatusLabel_timer
-            // 
+            //
             resources.ApplyResources(this.toolStripStatusLabel_timer, "toolStripStatusLabel_timer");
             this.toolStripStatusLabel_timer.ForeColor = System.Drawing.SystemColors.ControlLightLight;
             this.toolStripStatusLabel_timer.Image = global::Thetis.Properties.Resources.timer_on;

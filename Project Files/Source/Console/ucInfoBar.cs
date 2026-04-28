@@ -827,7 +827,7 @@ namespace Thetis
         public bool PSAEnabled
         {
             set
-            {                
+            {
                 _psEnabled = value;
                 if (!_psEnabled)
                     setPSboolsToFalse();
@@ -836,8 +836,44 @@ namespace Thetis
             }
         }
 
+        // ─── SunSDR ADC-overload (OVL) repurpose of the PS labels ───────────
+        // PS-A is hardware-dead on SunSDR (no ADC feedback path), so the FB /
+        // Pure-Signal2 labels in the upper-right of the InfoBar are dead real
+        // estate. We reuse lblPS as the ADC-overload indicator: bold red "OVL"
+        // when overload active, hidden otherwise. lblFB is hidden permanently.
+        private bool _sunsdrOvlMode = false;
+        private bool _sunsdrOverload = false;
+
+        public void EnterSunSDROvlMode()
+        {
+            _sunsdrOvlMode = true;
+            _psEnabled = false;
+            // Hide PureSignal/Feedback labels — the radio has no PS-A path.
+            lblFB.Visible = false;
+            // Repurpose lblPS as the ADC-Overload lamp.
+            lblPS.Text = "ADC-Overload";
+            lblPS.Font = new Font(lblPS.Font.FontFamily, 9f, FontStyle.Bold);
+            lblPS.ForeColor = Color.White;
+            lblPS.BackColor = Color.FromArgb(255, Color.DarkRed);
+            lblPS.TextAlign = ContentAlignment.MiddleCenter;
+            toolTip1.SetToolTip(lblPS, "ADC-Overload — strong signal saturating front end. Reduce ATT (try 0 dB or -10 dB).");
+            lblPS.Visible = false; // hidden until overload is detected
+        }
+
+        public bool Overload
+        {
+            set
+            {
+                if (!_sunsdrOvlMode) return;
+                if (_sunsdrOverload == value) return;
+                _sunsdrOverload = value;
+                lblPS.Visible = value;
+            }
+        }
+
         private void updatePSDisplay()
         {
+            if (_sunsdrOvlMode) return; // OVL mode owns lblPS — don't overwrite
             if (!_psEnabled)
             {
                 lblFB.BackColor = Color.FromArgb(255, Color.DimGray);
@@ -1235,7 +1271,11 @@ namespace Thetis
 
             _useSmallFonts = newSpan <= 180; // if space is too small, use small fonts
 
-            if (_useSmallFonts)
+            if (_sunsdrOvlMode)
+            {
+                // OVL mode owns lblPS / lblFB — skip the PS-related font/text swaps.
+            }
+            else if (_useSmallFonts)
             {
                 if (lblPS.Font != _smallPSFont) lblPS.Font = _smallPSFont;
                 if (lblFB.Text == "Feedback") lblFB.Text = "FB";

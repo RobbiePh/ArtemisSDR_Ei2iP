@@ -1163,6 +1163,16 @@ static double sunsdr_dbg_tx_cb_rms_min = 0.0;
 static double sunsdr_dbg_tx_cb_rms_max = 0.0;
 static double sunsdr_dbg_tx_cb_peak_max = 0.0;
 static volatile LONG sunsdr_dbg_tx_cb_vhf_clamp = 0;
+/* ADC-overload state (read-thread only — no atomicity needed).
+ * Rolling history of per-packet peak amplitudes for the ceiling-clustering
+ * detector (approach α). 500 packets ≈ 1 s of audio at SunSDR's 500 pkt/s
+ * cadence — enough to span CW key-up/key-down cycles. */
+static int    sunsdr_adc_overload_hold = 0;
+static int    sunsdr_adc_peak_pkt_count = 0;
+static double sunsdr_adc_peak_window = 0.0;
+static double sunsdr_adc_peak_history[500] = {0};
+static int    sunsdr_adc_peak_history_idx = 0;
+static int    sunsdr_adc_eval_skip = 0;
 static ULONGLONG sunsdr_dbg_tx_cb_last_tick = 0;
 static ULONGLONG sunsdr_dbg_tx_cb_max_gap_ms = 0;
 
@@ -3151,6 +3161,15 @@ int SunSDRGetHwPttState(void)
     return (int)InterlockedCompareExchange(&sdr.hwPttState, 0, 0);
 }
 
+/* Current ADC-overload state. Returns 1 if any IQ sample in the last
+ * ~2 seconds exceeded |0.95| of full scale (= within 0.4 dB of the
+ * direct-sample ADC's clipping point), 0 otherwise. Polled by the
+ * status-bar timer to drive the OVL lamp. See sunsdr.h for context. */
+int SunSDRGetAdcOverload(void)
+{
+    return (int)InterlockedCompareExchange(&sdr.adcOverloadActive, 0, 0);
+}
+
 /* Mic-source setter (OP 0x21 u32 payload).
  * Decoded from EESDR3 captures (2026-04-20):
  *   0 = Mic1, 1 = Mic2. (VAC / XLR enum values still TBD.)
@@ -4211,6 +4230,130 @@ DWORD WINAPI SunSDRReadThread(LPVOID param)
                 (double)((int)(payload[k + 2] << 24 |
                                payload[k + 1] << 16 |
                                payload[k + 0] << 8));     /* Q (from bytes 0-2) */
+        }
+
+        /* ADC-overload detection — PARKED 2026-04-28.
+         *
+         * Original premise: scan deswizzled IQ for clipped samples (|s| > 0.95)
+         * to flag ADC overload via the status-bar OVL lamp.
+         *
+         * Why parked: calibration logging confirmed the SunSDR's wire format
+         * has a hard ceiling at ~-62.7 dBFS. Wire IQ peak does not move at all
+         * even when the analog carrier strength changes by 13 dB and the
+         * panadapter clearly shows IMD spurs — the radio applies ~62 dB of
+         * fixed digital attenuation before transmitting samples. The clipping
+         * information that would let us flag overload is NOT in the data we
+         * receive on the wire. This signature can never work for SunSDR.
+         *
+         * Possible future paths if the OVL feature is revived:
+         *   - Wire RE: capture EESDR3 telemetry during deliberate overload
+         *     and look for a status bit. EESDR3 doesn't surface OVL either,
+         *     so the bit may not exist in the protocol. Unlikely to succeed.
+         *   - Spectral signature: detect IMD spur pattern in the panadapter
+         *     analyser output. Complex DSP work.
+         *   - Heuristic: ATT == +10 + sustained high-end peak for >2 s.
+         *     False-positive on any genuine strong signal. Cosmetic only.
+         *
+         * Approach (α): ceiling-clustering detection. The wire format has a
+         * hard cap at ~0.0007 (-63 dBFS) — discovered via calibration logging
+         * 2026-04-28 with carrier strength varied by 13 dB and wire peak
+         * NEVER moving. That cap IS the radio's internal digital limiter
+         * firing in response to analog ADC saturation. So peaks-clustered-
+         * tight-at-the-cap is itself the overload signature.
+         *
+         * Detection:
+         *   1. Maintain a 500-packet rolling history (~1 s of audio at the
+         *      SunSDR's 500 packets/s cadence) of per-packet peak amplitudes.
+         *   2. Every 100 packets (~200 ms), evaluate:
+         *        max_p  = max peak in history
+         *        n_h    = count of "above-noise" packets (peak > NOISE_GATE)
+         *        mean_h = mean of those above-noise peaks
+         *      Flag overload when ALL hold:
+         *        - max_p > NEAR_CAP_THRESHOLD       (signal IS near the cap)
+         *        - n_h   > HISTORY_SIZE / 4         (signal sustained, not blip)
+         *        - mean_h / max_p > CLUSTER_RATIO   (peaks tightly clustered = limiter active)
+         *      A mid-strength signal that doesn't overload won't push max_p
+         *      to NEAR_CAP_THRESHOLD; a strong but variable signal (voice)
+         *      won't keep mean_h close to max_p.
+         *   3. Atomic flip with hysteresis on transitions; sdr_logf on edges.
+         *
+         * Thresholds tuned to the calibration data (2026-04-28, 6m CW S9+20):
+         *   wire peak with strong-signal-causing-IMD:  0.000613..0.000733
+         *   wire peak during silence:                  0.000090..0.000170
+         *   wire peak gap (no signal):                 ~0.000020 noise floor
+         */
+        {
+            #define SUNSDR_ADC_HISTORY_SIZE    500       /* ~1 s @ 500 pkt/s   */
+            #define SUNSDR_ADC_EVAL_INTERVAL   100       /* re-eval every 200 ms */
+            #define SUNSDR_ADC_NOISE_GATE      0.0003    /* below this = silence */
+            #define SUNSDR_ADC_NEAR_CAP        0.00055   /* signal must reach within ~3 dB of observed cap */
+            #define SUNSDR_ADC_CLUSTER_RATIO   0.85      /* mean/max above this = clustered at limiter */
+            #define SUNSDR_ADC_OVL_HOLD_PACKETS 1000     /* ~2 s lamp hold */
+
+            double pkt_peak = 0.0;
+            for (i = 0; i < SUNSDR_IQ_COMPLEX_PER_PKT; i++) {
+                double si = sdr.rxBuf[2 * i + 0]; if (si < 0) si = -si;
+                double sq = sdr.rxBuf[2 * i + 1]; if (sq < 0) sq = -sq;
+                if (si > pkt_peak) pkt_peak = si;
+                if (sq > pkt_peak) pkt_peak = sq;
+            }
+
+            /* Calibration logger — kept active for ongoing tuning, harmless
+             * in release because sdr_logf is gated by SUNSDR_DEBUG_LOG_ENABLED. */
+            sunsdr_adc_peak_pkt_count++;
+            if (pkt_peak > sunsdr_adc_peak_window) sunsdr_adc_peak_window = pkt_peak;
+            if (sunsdr_adc_peak_pkt_count >= 500) {
+                sdr_logf("ADC PEAK: max=%.6f (last 500 packets, %.1f dBFS)\n",
+                    sunsdr_adc_peak_window,
+                    20.0 * log10(sunsdr_adc_peak_window + 1e-30));
+                sunsdr_adc_peak_pkt_count = 0;
+                sunsdr_adc_peak_window = 0.0;
+            }
+
+            /* Push into rolling history. */
+            sunsdr_adc_peak_history[sunsdr_adc_peak_history_idx] = pkt_peak;
+            sunsdr_adc_peak_history_idx = (sunsdr_adc_peak_history_idx + 1) % SUNSDR_ADC_HISTORY_SIZE;
+
+            /* Periodic evaluation of clustering. */
+            if (++sunsdr_adc_eval_skip >= SUNSDR_ADC_EVAL_INTERVAL) {
+                sunsdr_adc_eval_skip = 0;
+
+                double max_p = 0.0;
+                double sum_h = 0.0;
+                int    n_h = 0;
+                int    j;
+                for (j = 0; j < SUNSDR_ADC_HISTORY_SIZE; j++) {
+                    double p = sunsdr_adc_peak_history[j];
+                    if (p > max_p) max_p = p;
+                    if (p > SUNSDR_ADC_NOISE_GATE) { sum_h += p; n_h++; }
+                }
+
+                int ovl_now = 0;
+                if (max_p > SUNSDR_ADC_NEAR_CAP &&
+                    n_h > SUNSDR_ADC_HISTORY_SIZE / 4) {
+                    double mean_h = sum_h / (double)n_h;
+                    if (mean_h / max_p > SUNSDR_ADC_CLUSTER_RATIO) ovl_now = 1;
+                }
+
+                if (ovl_now) {
+                    sunsdr_adc_overload_hold = SUNSDR_ADC_OVL_HOLD_PACKETS;
+                    if (!InterlockedCompareExchange(&sdr.adcOverloadActive, 1, 0)) {
+                        sdr_logf("ADC OVERLOAD: detected (max=%.6f, mean_h=%.6f, n_h=%d, ratio=%.3f)\n",
+                            max_p, n_h > 0 ? sum_h / n_h : 0.0, n_h,
+                            n_h > 0 ? (sum_h / n_h) / max_p : 0.0);
+                    }
+                }
+            }
+
+            /* Hold-timer decrement runs every packet (not just on eval ticks)
+             * so the lamp clears predictably ~2 s after the last detection. */
+            if (sunsdr_adc_overload_hold > 0) {
+                if (--sunsdr_adc_overload_hold == 0) {
+                    if (InterlockedCompareExchange(&sdr.adcOverloadActive, 0, 1) == 1) {
+                        sdr_logf("ADC OVERLOAD: cleared (hold expired)\n");
+                    }
+                }
+            }
         }
 
         /* Feed native 312.5 kHz IQ directly to Thetis DSP pipeline (no resample) */
