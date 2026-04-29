@@ -2,11 +2,15 @@
 
 *Open source. Native protocol. Dedicated to Artemis II.*
 
-**Current version: v2.0.14**
+**Current version: v2.0.15**
 
 ⬇️ [**Download Latest Release**](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  📘 [**Quick Start Guide**](START_HERE_SUNSDR2DX.md)  ·  📝 [What's new](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  💬 [Discussions](https://github.com/kk68/ArtemisSDR/discussions)  ·  🐛 [Issues](https://github.com/kk68/ArtemisSDR/issues)
 
-### What's new in v2.0.14
+### What's new in v2.0.15
+
+- **Panadapter drift fixed.** The panadapter would, after running for several minutes, intermittently show a "replay" of the last ~1 second of the signal you were listening to — same trace appearing in the spectrum after the actual signal was already gone, while the waterfall and audio stayed current. The symptom would temporarily clear when you changed zoom, antenna, band, or mode, then drift back over time. Root cause was a 12-year-old buffer-overflow in WDSP's analyzer code (`Spectrum0` and three sister functions) that triggers only with non-integer-ratio sample rates — which is exactly what the SunSDR2 DX uses (312500 Hz native vs the 48000 Hz audio base, ratio 625:96). Anan/HPSDR rates are integer ratios so they never hit it; SunSDR did. The write loop overflowed the `I_samples`/`Q_samples` buffer by ~87 elements every ~1.7 seconds, gradually corrupting adjacent analyzer state until the FFT output started showing ghost artifacts. Fixed by replacing the linear write with a proper circular-buffer write that splits at the boundary, plus modular index wrap. The "replay" is gone end-to-end: panadapter stays sharp and current indefinitely, no need to zoom or change band to clear drift.
+
+### What was new in v2.0.14
 
 - **ADC-Overload (OVL) indicator.** A red **ADC-Overload** lamp now appears in the upper-right corner of the panadapter's info strip when the radio's ADC is being saturated by a strong nearby signal. When you see it, lower ATT (try 0 dB, then -10 / -20 dB) until it clears. **Important context:** this is a *diagnostic aid for a radio-side hardware limit*, not a software fix. The SunSDR2 DX's direct-sampling ADC has a finite dynamic range; if a nearby station is strong enough to drive that ADC into clip, no software can recover the original signal — the digital samples coming out of the radio are already saturated. Artemis just tells you it's happening so you can act. See [Strong-signal behavior, OVL, and "ghost" spurs](#strong-signal-behavior-ovl-and-ghost-spurs) below for the full picture. The lamp re-uses the now-disabled PureSignal2 / FB labels (PS-A is hardware-dead on SunSDR), so no real estate was added to the UI.
 - **cmASIO TX path fixed.** cmASIO TX previously produced robotic / chopped audio while RX through cmASIO was clean. Root cause was a block-size mismatch (cmASIO was supplying 96 samples per period while the SunSDR TX path consumes 64); the rmatch resampler is now created with asymmetric sizes for the SunSDR's non-integer sample-rate ratio. cmASIO TX is now clean end-to-end.
