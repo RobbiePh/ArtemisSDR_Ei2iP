@@ -6653,6 +6653,14 @@ namespace Thetis
                 chkFWCATUBypass.Checked = false;
             chkFWCATUBypass.Enabled = false;
             chkFWCATUBypass.Visible = false;
+
+            // ATT-on-TX: Anan/HPSDR Alex-board 0-31 dB step attenuator that
+            // SunSDR doesn't have. Without this clear, the main-UI ATT
+            // label flips to "[S-ATT]" with value 31 in red during TX —
+            // a permanent false alarm. The setter (above) hard-rejects
+            // re-enabling on SunSDR, so this is a one-shot clear that
+            // also handles a saved-DB state where ATTOnTX was true.
+            ATTOnTX = false;
             if (psform != null)
             {
                 psform.AutoCalEnabled = false;
@@ -19684,6 +19692,33 @@ namespace Thetis
             get { return m_bATTonTX; }
             set
             {
+                // SunSDR2 DX hard-override. The "ATT on TX" feature uses the
+                // Anan/HPSDR Alex-board 0-31 dB step attenuator, which the
+                // SunSDR2 DX does not have (its only attenuator is the
+                // +10/0/-10/-20 cycle button). Leaving this enabled on
+                // SunSDR makes the main-UI ATT label flip to "[S-ATT]"
+                // with the value forced to 31 and rendered in red — a
+                // permanent false alarm that confuses operators (the
+                // 31 never reaches the radio in any meaningful way; the
+                // SunSDR has no such register). Always force OFF on
+                // SunSDR regardless of caller intent or auto-att config.
+                // Bypasses the auto-att guard below because the hardware
+                // constraint takes precedence over operator config.
+                if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
+                {
+                    if (m_bATTonTX)
+                    {
+                        m_bATTonTX = false;
+                        updateAttNudsCombos();
+                        if (PowerOn)
+                        {
+                            NetworkIO.SetTxAttenData(0);
+                            Display.TXAttenuatorOffset = 0;
+                        }
+                    }
+                    return;
+                }
+
                 if (!value && _auto_attTX_when_not_in_ps) return; // ignore in this case
                 m_bATTonTX = value;
                 updateAttNudsCombos();
