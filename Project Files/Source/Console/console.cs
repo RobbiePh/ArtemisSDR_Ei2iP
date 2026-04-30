@@ -28005,6 +28005,33 @@ namespace Thetis
 
             if (chkPower.Checked)
             {
+                // SunSDR pre-flight reachability check — MUST run before any
+                // Power-On state changes. The rate cascade below triggers
+                // specRX.initAnalyzer which starts drawing empty FFT pixels
+                // (visible as a noise-floor "green band" in the panadapter)
+                // if we end up failing the radio probe later. Catching the
+                // unreachable-radio case here means no UI / analyzer state
+                // gets touched if the radio isn't there.
+                //
+                // Note: NetworkIO.InitRadio also runs its own pre-flight as
+                // a safety net for callers that bypass this handler. The
+                // duplication is intentional belt-and-suspenders.
+                if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
+                {
+                    if (!NetworkIO.TrySunSDRPreflightFromSetup())
+                    {
+                        MessageBox.Show(
+                            "No radio detected.\n\nCheck that the radio is powered on and reachable.",
+                            "ArtemisSDR",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning,
+                            MessageBoxDefaultButton.Button1,
+                            Common.MB_TOPMOST);
+                        chkPower.Checked = false;
+                        return;
+                    }
+                }
+
                 chkPower.BackColor = button_selected_color;
                 txtVFOAFreq.ForeColor = vfo_text_light_color;
                 txtVFOAMSD.ForeColor = vfo_text_light_color;

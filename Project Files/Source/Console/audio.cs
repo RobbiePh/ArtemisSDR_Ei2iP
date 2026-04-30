@@ -1778,12 +1778,20 @@ namespace Thetis
 
             if (rc != 0)
             {
-                if (rc == -101) // firmware version error; 
+                if (rc == -101) // firmware version error;
                 {
                     string fw_err = NetworkIO.GetFWVersionErrorMsg;
                     MessageBox.Show(fw_err, "Firmware Error",
                                     MessageBoxButtons.OK,
                                     MessageBoxIcon.Error, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
+                    return false;
+                }
+                else if (rc == -110) // SunSDR pre-flight reachability check failed
+                {
+                    MessageBox.Show("No radio detected.\n\nCheck that the radio is powered on and reachable.",
+                                    "ArtemisSDR",
+                                    MessageBoxButtons.OK,
+                                    MessageBoxIcon.Warning, MessageBoxDefaultButton.Button1, Common.MB_TOPMOST);
                     return false;
                 }
                 else

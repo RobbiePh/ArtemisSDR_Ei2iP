@@ -63,6 +63,7 @@ namespace Thetis
             // -104 invalid host IP
             // -105 no nic currently selected
             // -106 no radio currently selected
+            // -110 SunSDR pre-flight reachability check failed (not powered/unreachable)
 
             Console c = Console.getConsole();
             if (c.IsSetupFormNull) return -1;
@@ -109,6 +110,19 @@ namespace Thetis
             // and the first IQ packets feed the wrong WDSP inputs.
             if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
             {
+                // Pre-flight reachability check. nativeInitMetis just opens
+                // UDP sockets (UDP is connectionless — always "succeeds"),
+                // and the SunSDRPowerOn macro fires ~22 control packets
+                // with 200 ms select-timeouts each, ignoring the return
+                // value of every send-and-recv. With a dead radio this
+                // burns ~9 seconds in silent timeouts and then falsely
+                // returns success — operator sees Artemis "running" with
+                // no IQ, no audio, no error. Two-step pre-flight here
+                // gates that flow with a hard ~2 sec ceiling, so we fail
+                // fast and surface the right error to the operator.
+                if (!CheckSunSDRReachable(radioIP, ratioPort))
+                    return -110;  // SunSDR not reachable (pre-flight failed)
+
                 protocol = (int)RadioProtocol.SUNSDR;
                 CurrentRadioProtocol = RadioProtocol.SUNSDR;
                 cmaster.CMLoadRouterAll(HardwareSpecific.Model);
@@ -242,6 +256,104 @@ namespace Thetis
             }
 
             return ret;
+        }
+
+        // Public wrapper used by chkPower_CheckedChanged to do the
+        // SunSDR pre-flight BEFORE any Power-On state changes (rate
+        // cascade, analyzer init, VFO setup). Without the early check,
+        // the rate cascade in console.cs triggers specRX.initAnalyzer
+        // which starts drawing empty FFT pixels (visible as a noise-
+        // floor "green band" in the panadapter) — even though we
+        // ultimately fail the pre-flight inside InitRadio. Calling
+        // this first means no UI / analyzer state changes if the
+        // radio isn't there.
+        //
+        // Returns true if reachable OR if the setup form / radio list
+        // isn't available (in which case InitRadio's own pre-flight
+        // is the safety net).
+        public static bool TrySunSDRPreflightFromSetup()
+        {
+            try
+            {
+                Console c = Console.getConsole();
+                if (c.IsSetupFormNull) return true;
+                ucRadioList rl = c.SetupForm.SelectedRadioList;
+                if (rl == null) return true;
+                RadioInfo ri = rl.SelectedRadioDetails;
+                if (ri == null) return true;
+                string radioIP = ri.IpAddress.ToString();
+                int ctrlPort = ri.DiscoveryPortBase;
+                return CheckSunSDRReachable(radioIP, ctrlPort);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"TrySunSDRPreflightFromSetup: defaulted to true after {ex.GetType().Name}: {ex.Message}");
+                return true;
+            }
+        }
+
+        // Two-step pre-flight reachability check for SunSDR.
+        //   Step 1: ICMP ping to the radio's IP (1 sec timeout). The
+        //           SunSDR has its own NIC inside the radio — when the PSU
+        //           is off, the NIC is off, so ping fails fast.
+        //   Step 2: UDP firmware-manager query (0x1A opcode, 18 bytes) to
+        //           the control port. Same packet that
+        //           sunsdr_query_firmware_manager_version sends from the
+        //           native side. Wait 1 sec for any reply.
+        // Both steps must succeed for the radio to be considered reachable.
+        // Hard ceiling is ~2 sec before failure, vs. ~9 sec of silent
+        // timeouts in the SunSDRPowerOn macro path with no error feedback.
+        // Operator sees a single "No radio detected" message and chkPower
+        // un-checks itself.
+        private static bool CheckSunSDRReachable(string radioIP, int ctrlPort)
+        {
+            // Step 1: ICMP ping.
+            try
+            {
+                using (Ping ping = new Ping())
+                {
+                    PingReply reply = ping.Send(radioIP, 1000);
+                    if (reply.Status != IPStatus.Success)
+                    {
+                        System.Diagnostics.Debug.WriteLine(
+                            $"SunSDR pre-flight: ping failed ({reply.Status}) for {radioIP}");
+                        return false;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"SunSDR pre-flight: ping threw {ex.GetType().Name}: {ex.Message}");
+                return false;
+            }
+
+            // Step 2: UDP firmware-manager query (18-byte 0x1A opcode).
+            // Radio reliably replies with a 0x1A response containing FW
+            // version. Any reply at all = radio is alive and listening.
+            try
+            {
+                using (UdpClient udp = new UdpClient())
+                {
+                    udp.Client.ReceiveTimeout = 1000;
+                    byte[] probe = new byte[]
+                    {
+                        0x32, 0xff, 0x1a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+                    };
+                    udp.Send(probe, probe.Length, radioIP, ctrlPort);
+                    IPEndPoint sender = null;
+                    udp.Receive(ref sender);
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"SunSDR pre-flight: UDP probe threw {ex.GetType().Name}: {ex.Message}");
+                return false;
+            }
         }
 
         public static void RefreshSunSDRVersionInfo()
