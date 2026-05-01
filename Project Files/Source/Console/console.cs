@@ -25809,6 +25809,30 @@ namespace Thetis
             return watts;
         }
 
+        // Per-band SunSDR2 DX forward-power calibration (K, C) for
+        // watts = K * (adc - C)^2. See computeAlexFwdPower for the
+        // procedure to measure and add a new band. Bands without an
+        // entry fall back to 20m's coefficients (default).
+        private static (double K, double C) GetSunsdrPwrCal(Band b)
+        {
+            switch (b)
+            {
+                case Band.B40M:
+                    // Measured 2026-05-01 with LP-500 against 10-point drive
+                    // sweep on 7.225 LSB. Was understating by up to 28 W;
+                    // refit reduces displayed value. Predicted vs measured
+                    // tracks within ~1-3 W across drive 5-97 W.
+                    return (0.00343, 38.0);
+
+                case Band.B20M:
+                default:
+                    // Confirmed 2026-05-01 with LP-500: meter matches actual
+                    // within ~0.5 W across drive 5-95 on 14.074. Used as
+                    // fallback for bands without their own measurement.
+                    return (0.00412, 33.0);
+            }
+        }
+
         public float computeAlexFwdPower()
         {
             float adc = 0;
@@ -25817,16 +25841,32 @@ namespace Thetis
             float refvoltage = 0;
             int adc_cal_offset = 0;
 
-            // SunSDR2 DX: telemetry u16 at packet bytes 14-15 is forward voltage.
-            // Quadratic model confirmed 2026-04-09: watts = 0.00412 * (value - 33)^2
-            // u16 ∝ RF voltage at directional coupler, power ∝ V^2
-            // Calibration points (40m, external wattmeter):
-            //   u16≈85 → 11W, u16≈142 → 50W, u16≈186 → 96W
+            // SunSDR2 DX forward-power calibration.
+            //
+            // Telemetry u16 at packet bytes 14-15 is a directional-coupler
+            // voltage reading. Power is approximately V^2, so we fit a
+            // quadratic per band: watts = K * (adc - C)^2.
+            //
+            // The coupler's coupling factor and detector diode response are
+            // FREQUENCY DEPENDENT — flat across one band but drifts across
+            // 160m..6m. So each band gets its own (K, C) pair, measured
+            // against an external wattmeter (LP-500). Bands without a
+            // measurement fall back to 20m's coefficients (mid-HF, confirmed
+            // accurate, best single-band default).
+            //
+            // To add a new band's calibration:
+            //   1. TUNE on the new band, sweep drive 5-95 W in ~10 steps.
+            //   2. Record (Artemis_displayed, LP-500_actual) pairs.
+            //   3. For each pair: adc = sqrt(displayed/0.00412) + 33  (back-derive
+            //      the raw adc using the 20m formula).
+            //   4. Least-squares fit watts_LP500 = K*(adc - C)^2 over all pairs.
+            //   5. Add a case to GetSunsdrPwrCal below.
             if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
             {
                 adc = NetworkIO.getFwdPower();
-                double v = Math.Max(0.0, adc - 33.0);
-                float sunWatts = (float)(0.00412 * v * v);
+                (double K, double C) cal = GetSunsdrPwrCal(_tx_band);
+                double v = Math.Max(0.0, adc - cal.C);
+                float sunWatts = (float)(cal.K * v * v);
                 if (PAValues)
                 {
                     average_fwdadc = alpha * average_fwdadc + (1.0f - alpha) * adc;
