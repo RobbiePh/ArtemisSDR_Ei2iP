@@ -1,12 +1,14 @@
-# Start Here: SunSDR2 DX Setup In ArtemisSDR
+# Start Here: SunSDR2 Setup In ArtemisSDR
 
-This guide is the shortest reliable path to get a SunSDR2 DX working in this ArtemisSDR fork.
+This guide is the shortest reliable path to get a **SunSDR2 DX** or **SunSDR2 PRO** working in ArtemisSDR.
+
+> **PRO note (v2.1.0):** SunSDR2 PRO support shipped in v2.1.0 and the same steps apply — pick **`SUNSDR2-PRO`** instead of `SUNSDR2-DX` in step 2. PRO support is in **preview**: the discovery, model auto-detection, and bring-up paths work, but a few PRO-side details (extreme spectrum-zoom rendering, VAC-on-mode-change behaviour) are still being shaken out with PRO testers. The 2 m / VHF-specific guidance in this doc is DX-only; PRO has different band coverage and gets its own band-coverage notes once verified on hardware.
 
 ## Before You Start
 
 You need:
 
-- a working SunSDR2 DX on the network
+- a working SunSDR2 DX or SunSDR2 PRO on the network
 - ArtemisSDR built from this SunSDR-enabled fork
 - a Windows audio path you intend to use
   - ASIO if available
@@ -25,9 +27,10 @@ Launch ArtemisSDR and open:
 
 ## 2. Select The Radio Model
 
-In ArtemisSDR, set the hardware model to:
+In ArtemisSDR, set the hardware model to match your radio:
 
-- `SunSDR2DX`
+- `SUNSDR2-DX` — for the SunSDR2 DX
+- `SUNSDR2-PRO` — for the SunSDR2 PRO
 
 If ArtemisSDR was previously configured for another radio, close and reopen it after changing the model.
 

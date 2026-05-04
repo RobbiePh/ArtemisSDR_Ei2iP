@@ -4,13 +4,13 @@
 
 **Current version: v2.1.0**
 
-⬇️ [**Download Latest Release**](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  📘 [**Quick Start Guide**](START_HERE_SUNSDR2DX.md)  ·  📝 [What's new](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  💬 [Discussions](https://github.com/kk68/ArtemisSDR/discussions)  ·  🐛 [Issues](https://github.com/kk68/ArtemisSDR/issues)
+⬇️ [**Download Latest Release**](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  📘 [**Quick Start Guide**](START_HERE.md)  ·  📝 [What's new](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  💬 [Discussions](https://github.com/kk68/ArtemisSDR/discussions)  ·  🐛 [Issues](https://github.com/kk68/ArtemisSDR/issues)
 
-![ArtemisSDR running on 40m — panadapter + waterfall, SunSDR2 DX native protocol](docs/screenshot-main.png)
+![ArtemisSDR running on 40m — panadapter + waterfall, SunSDR2 native protocol](docs/screenshot-main.png)
 
-**An SDR host for the SunSDR2 DX — forked from Thetis.** ArtemisSDR is an additional option for SunSDR2 DX users who want the Thetis-lineage DSP stack — panadapter, filter set, NR/NB/notch toolkit, VAC routing, and the full feature set — running against the radio's native wire protocol. No ExpertSDR proxy, no bridge, no firmware changes.
+**An SDR host for the SunSDR2 family (DX + PRO) — forked from Thetis.** ArtemisSDR is an additional option for SunSDR2 DX and PRO users who want the Thetis-lineage DSP stack — panadapter, filter set, NR/NB/notch toolkit, VAC routing, and the full feature set — running against the radio's native wire protocol. No ExpertSDR proxy, no bridge, no firmware changes.
 
-ArtemisSDR is maintained by Kosta Kanchev (K0KOZ). It is a fork of [Thetis](https://github.com/ramdor/Thetis) by Richard Samphire (MW0LGE), which itself descends from OpenHPSDR (Doug Wigley, W5WC) and PowerSDR (FlexRadio Systems). Specialized for the SunSDR2 DX and released under GPL v2.
+ArtemisSDR is maintained by Kosta Kanchev (K0KOZ). It is a fork of [Thetis](https://github.com/ramdor/Thetis) by Richard Samphire (MW0LGE), which itself descends from OpenHPSDR (Doug Wigley, W5WC) and PowerSDR (FlexRadio Systems). Specialized for the SunSDR2 family (DX + PRO) and released under GPL v2.
 
 ### What's new in v2.1.0
 
@@ -108,7 +108,7 @@ Distributed free of charge under the GNU General Public License v2 for the amate
 
 You'll get the most out of this fork if:
 
-- You own a **SunSDR2 DX** and want to use it with ArtemisSDR instead of (or alongside) ExpertSDR.
+- You own a **SunSDR2 DX** or **SunSDR2 PRO** and want to use it with ArtemisSDR instead of (or alongside) ExpertSDR.
 - You're OK running a Windows MSI installer (or building from source — both are supported).
 - You have an external wattmeter and dummy load handy for the first TX bring-up on each band.
 - You operate with normal amateur-radio discipline — we transmit into dummy loads for testing, not onto the air.
@@ -139,7 +139,7 @@ If you're brand new to SDR or to your radio, work through your radio's official 
 
 **Network & setup**
 
-- **Native SunSDR2 DX auto-discovery** — `Setup → H/W Select → Discover` now finds the radio automatically. The manual `Custom` fallback remains for unusual network topologies (VPN, multi-NIC, routers that block UDP broadcast).
+- **Native SunSDR2 (DX + PRO) auto-discovery** — `Setup → H/W Select → Discover` now finds the radio automatically. The manual `Custom` fallback remains for unusual network topologies (VPN, multi-NIC, routers that block UDP broadcast).
 - Simplified Custom Radio dialog — field is `Radio IP` (no port), pre-fills with the previously configured IP.
 
 **General**
@@ -218,18 +218,18 @@ ArtemisSDR does **not** send any data to the author (K0KOZ), to kk68, or to any 
 
 ## Getting started
 
-A complete step-by-step walkthrough lives in **[START_HERE_SUNSDR2DX.md](START_HERE_SUNSDR2DX.md)** — covers the Windows/network prerequisites, radio discovery, first-run setup, audio routing, and first TX. Read that one after you have a build.
+A complete step-by-step walkthrough lives in **[START_HERE.md](START_HERE.md)** — covers the Windows/network prerequisites, radio discovery, first-run setup, audio routing, and first TX. Read that one after you have a build.
 
 Short version:
 
 1. Build the solution (see [Building from source](#building-from-source) below).
-2. Launch ArtemisSDR, pick **SunSDR2DX** as the hardware model, confirm **"Use watts on Drive/Tune slider"** is on in `Setup → General`.
+2. Launch ArtemisSDR, pick **SUNSDR2-DX** (or **SUNSDR2-PRO**) as the hardware model, confirm **"Use watts on Drive/Tune slider"** is on in `Setup → General`.
 3. Connect the radio, hit Power in ArtemisSDR, verify you're receiving.
 4. Dummy load, 25 W drive, LSB TUNE on 40 m → confirm ~25 W on an external wattmeter.
 
 ## Troubleshooting
 
-**ArtemisSDR doesn't see the radio.** First try the **Discover** button in `Setup → H/W Select` — native SunSDR2 DX auto-discovery is live as of v2.0.0 and finds the radio automatically within ~1 second. See [START_HERE_SUNSDR2DX.md → Step 3](START_HERE_SUNSDR2DX.md#step-3a--click-discover-recommended) for screenshots. If Discover reports "No Radio(s) found", check: (a) the radio is powered on and on the same LAN as the PC; (b) no other ExpertSDR / Thetis / SDR client is connected — the SunSDR2 DX allows only one client at a time; (c) Windows Firewall is not blocking ArtemisSDR's outbound UDP broadcast to port 50001. Still nothing? Fall back to the manual path: tick `Advanced` → `Custom` → fill in **Via NIC** + **Radio IP**. If you run the radio on a non-default control port, enter `IP:port` in the Radio IP field (e.g. `10.0.3.50:40001`). Then verify the radio's IP is reachable (`ping <your-radio-IP>`) from the host. The most common mistake after a manual add is picking the wrong **Via NIC** — it must be the adapter on the same subnet as the radio.
+**ArtemisSDR doesn't see the radio.** First try the **Discover** button in `Setup → H/W Select` — native SunSDR2 (DX + PRO) auto-discovery finds the radio automatically within ~1 second. See [START_HERE.md → Step 3](START_HERE.md#step-3a--click-discover-recommended) for screenshots. If Discover reports "No Radio(s) found", check: (a) the radio is powered on and on the same LAN as the PC; (b) no other ExpertSDR / Thetis / SDR client is connected — the SunSDR2 DX allows only one client at a time; (c) Windows Firewall is not blocking ArtemisSDR's outbound UDP broadcast to port 50001. Still nothing? Fall back to the manual path: tick `Advanced` → `Custom` → fill in **Via NIC** + **Radio IP**. If you run the radio on a non-default control port, enter `IP:port` in the Radio IP field (e.g. `10.0.3.50:40001`). Then verify the radio's IP is reachable (`ping <your-radio-IP>`) from the host. The most common mistake after a manual add is picking the wrong **Via NIC** — it must be the adapter on the same subnet as the radio.
 
 **No TX RF output.** Confirm `Setup → General → Use watts on Drive/Tune slider` is on. Confirm the drive slider isn't at zero. Confirm you're in a transmittable mode (not SPEC or DRM).
 

@@ -86,7 +86,7 @@ ArtemisSDR rebrand):
 - All WiX installer files under `Project Files/Source/ArtemisSDR-Installer/`
 - `Project Files/Source/ArtemisSDR.sln`
 - `Project Files/Source/Console/ArtemisSDR.csproj`
-- `ReadMe.md`, `TECHNICAL.md`, `START_HERE_SUNSDR2DX.md`,
+- `ReadMe.md`, `TECHNICAL.md`, `START_HERE.md`,
   `Project Files/Source/ReleaseNotes.txt`
 
 ### Nature of modifications
