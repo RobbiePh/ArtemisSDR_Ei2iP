@@ -56,6 +56,7 @@
             this.lstContributors.ItemHeight = 16;
             this.lstContributors.Items.AddRange(new object[] {
             "K0KOZ, Kosta (ArtemisSDR fork — SunSDR2 DX native protocol & integration)",
+            "@Tort1k558, Dmitry (ArtemisSDR — SunSDR2 PRO integration)",
             "",
             "NR0V, Warren (WDSP & too many other contributions to list)",
             "G8NJJ, Laurence (G2, Andromeda & protocols)",
