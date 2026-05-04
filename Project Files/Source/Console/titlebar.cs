@@ -50,7 +50,12 @@ namespace Thetis
 {
     class TitleBar
     {
-        public const string BUILD_NAME = "SunSDR2 DX";
+        // Generic SunSDR2 family label — used by the About dialog version line
+        // and by Common.GetVerNum(include_build=true) for log / Andromeda
+        // identification. The connected radio's specific model (DX / PRO) is
+        // surfaced separately via sModel in the About dialog and via the
+        // discovered DisplayName.
+        public const string BUILD_NAME = "SunSDR2";
         public static string GetString(bool bWithFirmware = true)
         {
             string sRevision = "." + Common.GetRevision();
@@ -64,10 +69,11 @@ namespace Thetis
             s += " v" + version + sBits;
             s += " (" + VersionInfo.BuildDate + ")<FW>";  //[2.10.2.2]MW0LGE use the auto generated class from pre build event for the BuildDate
 
-            // BUILD_NAME intentionally not appended to the title bar — ArtemisSDR
-            // only supports the SunSDR2 DX, so echoing it here is redundant with
-            // the brand and the "SunSDR Native" protocol label in the <FW> block.
-            // BUILD_NAME is still used in the About dialog version line.
+            // BUILD_NAME intentionally not appended to the title bar —
+            // the generic family label would be redundant with the
+            // "SunSDR Native" protocol label already in the <FW> block,
+            // and the connected radio's specific model is shown in the
+            // discovered-radio list and About dialog when needed.
 
             if (!bWithFirmware) s = s.Replace("<FW>", "");
 

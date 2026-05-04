@@ -2,7 +2,7 @@
 
 *Open source. Native protocol. Dedicated to Artemis II.*
 
-**Current version: v2.0.16**
+**Current version: v2.1.0**
 
 ⬇️ [**Download Latest Release**](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  📘 [**Quick Start Guide**](START_HERE_SUNSDR2DX.md)  ·  📝 [What's new](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  💬 [Discussions](https://github.com/kk68/ArtemisSDR/discussions)  ·  🐛 [Issues](https://github.com/kk68/ArtemisSDR/issues)
 
@@ -12,7 +12,27 @@
 
 ArtemisSDR is maintained by Kosta Kanchev (K0KOZ). It is a fork of [Thetis](https://github.com/ramdor/Thetis) by Richard Samphire (MW0LGE), which itself descends from OpenHPSDR (Doug Wigley, W5WC) and PowerSDR (FlexRadio Systems). Specialized for the SunSDR2 DX and released under GPL v2.
 
-### What's new in v2.0.16
+### What's new in v2.1.0
+
+**Native SunSDR2 PRO support.** ArtemisSDR now drives both SunSDR2 DX *and* SunSDR2 PRO from the same release. Built on Dmitry @Tort1k558's contribution PR #30 — first external community contribution to ArtemisSDR. Discovery, model auto-detection, profile-table dispatch, and the bring-up paths are all in place. PRO support is in **preview**: validated on a SunSDR2 DX (no DX regressions), but the PRO-side bring-up needs more on-air time. PRO users running v2.1.0 are encouraged to file issues at https://github.com/kk68/ArtemisSDR/issues.
+
+**Per-band TX power calibration.** SunSDR2 DX TX meter is now calibrated on a per-band basis (40 m: K=0.00343 / C=38; 20 m and other bands: K=0.00412 / C=33). The earlier single-curve fit was accurate on 20 m and over-reading on 40 m by up to 28 W. Bands beyond 40/20 default to the 20 m curve and will get their own measurements as users send LP-500 sweeps.
+
+**v2.1.0 also includes everything from v2.0.10 → v2.0.16:**
+
+- **v2.0.16:** "No radio detected" pre-flight check on Power-On — fail-fast in 2 s instead of 9 s of silent timeouts.
+- **v2.0.15:** WDSP analyzer buffer-overflow fix (panadapter "replay" drift); ATT-on-TX hard-disabled on SunSDR (S-ATT 31 cosmetic fix).
+- **v2.0.14:** ADC-Overload (OVL) indicator in status bar; MON button disabled (parked TX-monitor routing issue).
+- **v2.0.13:** cmASIO restored under Setup → Audio for SunSDR2 DX.
+- **v2.0.12:** Cold-start robotic-audio bug class CLOSED + matching exit-crash root cause.
+- **v2.0.11:** Recording fix + silent-startup fix + ATT-on-power-on + exit hardening.
+- **v2.0.10:** ATT recovery after TX + crash-free startup + clean close.
+
+If you've been running v2.0.16, the only new things you'll notice are the per-band power meter accuracy and (on PRO) the radio actually working. DX users: no behavioural changes from v2.0.16 expected.
+
+**Credits:** First external contributor to ArtemisSDR — @Tort1k558 (Dmitry, PR #30). Welcome aboard.
+
+### What was new in v2.0.16
 
 - **"No radio detected" pre-flight check on Power-On.** If the radio is unpowered, the cable is unplugged, or the IP is wrong, clicking Power-On previously took ~9 seconds of silent timeouts and then proceeded as if everything had succeeded — operator saw Artemis "running" with no IQ, no audio, and no error. Now Artemis runs a two-step pre-flight check (ICMP ping + UDP firmware-query probe) with a hard ~2 second ceiling. On failure: a single "No radio detected" message, the Power button auto-unchecks, and no UI / DSP state gets touched (no panadapter analyzer initialization, no rate cascade). Click Power-On again with the radio reachable and it proceeds normally.
 
@@ -76,7 +96,7 @@ When **VAC + ASIO is the right choice instead:** if you need VAC to feed digital
 
 ### ⚠️ Disclaimer
 
-This project is **not affiliated with, endorsed by, sponsored by, or otherwise connected to Expert Electronics.** "SunSDR", "SunSDR2 DX", and "ExpertSDR" are trademarks of their respective owners; they appear in this project only to identify the hardware this software is compatible with.
+This project is **not affiliated with, endorsed by, sponsored by, or otherwise connected to Expert Electronics.** "SunSDR", "SunSDR2 DX", "SunSDR2 PRO", and "ExpertSDR" are trademarks of their respective owners; they appear in this project only to identify the hardware this software is compatible with.
 
 The implementation is the product of independent, black-box reverse engineering — passive observation of UDP traffic between a genuine ExpertSDR instance and a lawfully-owned SunSDR2 DX radio. **No ExpertSDR code, binaries, firmware, artwork, or other Expert Electronics intellectual property is used.** The radio's firmware is not modified in any way; this is purely a host-side client that speaks the same wire protocol ExpertSDR does. Protocol-compatibility reverse engineering for interoperability is a well-established practice in open-source software (Samba, WINE, ReactOS) and is specifically recognized under 17 U.S.C. § 1201(f).
 
