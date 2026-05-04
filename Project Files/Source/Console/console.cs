@@ -740,7 +740,32 @@ namespace Thetis
             }
             LogTool.AddLogEntry("Directories ok");
 
-            Splash.ShowSplashScreen("ArtemisSDR " + Common.GetVerNum(true, true), splash_screen_folder);							// Start splash screen with version number
+            // Splash: show "ArtemisSDR <InformationalVersion>" — e.g.
+            // "ArtemisSDR v2.1.0.0-test" on the feature/sunsdr2-pro
+            // preview build, "ArtemisSDR v2.1.0" on a stable release.
+            //
+            // Using the InformationalVersion (ProductVersion on the PE)
+            // preserves the 'v' prefix and any suffix like '-test' or
+            // '-beta' that gets set in AssemblyInfo.cs. Common.GetVerNum
+            // reads AssemblyFileVersion which is strictly numeric and
+            // drops those markers.
+            //
+            // BUILD_NAME used to append "SunSDR2 DX" here, which stops
+            // being true once PRO support ships. The About dialog still
+            // surfaces the build name per-radio; the splash is a brand
+            // line, not a model label.
+            string splashVer;
+            try
+            {
+                splashVer = System.Diagnostics.FileVersionInfo
+                    .GetVersionInfo(System.Reflection.Assembly.GetExecutingAssembly().Location)
+                    .ProductVersion;
+            }
+            catch
+            {
+                splashVer = Common.GetVerNum(true, false);
+            }
+            Splash.ShowSplashScreen("ArtemisSDR " + splashVer, splash_screen_folder);
 
             LogTool.AddLogEntry("Splash screen shown");
 
@@ -4094,19 +4119,21 @@ namespace Thetis
                     case "rx1_meter_cal_offset":
                         {
                             float loaded = float.Parse(val);
-                            // One-time migration for SunSDR2 DX. Two legacy
+                            // One-time migration for SunSDR2 family. Two legacy
                             // values trip the upgrade: the pre-v2.0.7 fall-
-                            // through default of 0.98 dB, and the v2.0.7
+                            // through default of 0.98 dB, and the v2.0.7 DX
                             // coarse-anchor value of 6.98 dB (which turned
-                            // out to still be ~12 dB low vs EESDR3). Both
-                            // get lifted to whatever the current SUNSDR2DX
+                            // out to still be ~12 dB low vs EESDR3 on DX).
+                            // Both get lifted to whatever the current model
                             // default is. Customised values outside these
-                            // two known-bad points are left alone.
-                            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX
+                            // two known-bad points are left alone. Applies
+                            // to both SUNSDR2DX and SUNSDR2PRO via
+                            // IsCurrentSunSDRModel.
+                            if (HardwareSpecific.IsCurrentSunSDRModel
                                 && (Math.Abs(loaded - 0.98f) < 0.01f
                                     || Math.Abs(loaded - 6.98f) < 0.01f))
                             {
-                                loaded = HardwareSpecific.RXMeterCalbrationOffsetDefaults(HPSDRModel.SUNSDR2DX);
+                                loaded = HardwareSpecific.RXMeterCalbrationOffsetDefaults(HardwareSpecific.Model);
                             }
                             RX1MeterCalOffset = loaded;
                         }
@@ -4117,11 +4144,11 @@ namespace Thetis
                     case "rx2_meter_cal_offset":
                         {
                             float loaded = float.Parse(val);
-                            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX
+                            if (HardwareSpecific.IsCurrentSunSDRModel
                                 && (Math.Abs(loaded - 0.98f) < 0.01f
                                     || Math.Abs(loaded - 6.98f) < 0.01f))
                             {
-                                loaded = HardwareSpecific.RXMeterCalbrationOffsetDefaults(HPSDRModel.SUNSDR2DX);
+                                loaded = HardwareSpecific.RXMeterCalbrationOffsetDefaults(HardwareSpecific.Model);
                                 System.Diagnostics.Debug.WriteLine("[SunSDR migration] rx2_meter_cal_offset legacy -> " + loaded);
                             }
                             RX2MeterCalOffset = loaded;
@@ -5897,7 +5924,7 @@ namespace Thetis
 
         private void EnableAllBands()
         {
-            bool sunsdr = HardwareSpecific.Model == HPSDRModel.SUNSDR2DX;
+            bool sunsdr = HardwareSpecific.IsCurrentSunSDRModel;
             foreach (Control c in panelBandHF.Controls)
             {
                 if (c is RadioButtonTS b)
@@ -6629,20 +6656,10 @@ namespace Thetis
         // SetupForHPSDRModel is not called on plain startup.
         private void ApplySunSDRSpecificUI()
         {
-            // Family-level gate. Use HardwareSpecific.Model (set early during
-            // HardwareSpecific construction, before network IO opens) — NOT
-            // NetworkIO.CurrentRadioProtocol, which isn't reliably set at the
-            // UI-setup phase when this method first runs. Using the protocol
-            // here causes the function to early-return during initial paint,
-            // leaving 2TON/DUP/PS-A visible and the 2m band button disabled.
-            //
-            // When SunSDR2 Pro / MB1 / future siblings are added to HPSDRModel,
-            // OR-extend the check below. The family-wide UI hardening below
-            // is safe for any SunSDR variant; only the DX-specific 2m band
-            // and MaxFreq settings stay gated on the precise model further
-            // down.
-            bool isSunSDRFamily = HardwareSpecific.Model == HPSDRModel.SUNSDR2DX;
-            if (!isSunSDRFamily) return;
+            // Family-level gate. SunSDR-family hardening below is safe for any
+            // SunSDR variant; only the DX-specific 2m band and MaxFreq settings
+            // stay gated on the precise model further down.
+            if (!HardwareSpecific.IsCurrentSunSDRModel) return;
 
             // ─── SunSDR family-wide UI hardening (any SunSDR radio) ──────────
 
@@ -6719,6 +6736,8 @@ namespace Thetis
                 RefreshFMFilterButtonLabels(true);
             if (_rx2_dsp_mode == DSPMode.FM)
                 RefreshFMFilterButtonLabels(false);
+
+            UpdateFMButtonLabels();
 
             // ─── SunSDR2 DX model-specific (Pro / siblings will need their own gates) ──
 
@@ -15477,6 +15496,13 @@ namespace Thetis
                 RX2DisplayCalOffset = rx_display_cal_offset_by_radio[HardwareSpecific.ModelInt];
             }
 
+            // SunSDR widens the legal RX ceiling far above the legacy
+            // 61.44 MHz default. When switching models, validate the VFO
+            // against the correct ceiling first; otherwise a 2m frequency
+            // gets clipped to 61.44 before the SunSDR UI override runs.
+            if (HardwareSpecific.IsCurrentSunSDRModel)
+                ApplySunSDRSpecificUI();
+
             if (!IsSetupFormNull && HardwareSpecific.OldModel != HardwareSpecific.Model)
                 txtVFOAFreq_LostFocus(this, EventArgs.Empty);
 
@@ -15921,7 +15947,7 @@ namespace Thetis
                     chkPower.Checked)
                     chkMOX.Enabled = !_rx_only;
                 chkTUN.Enabled = !_rx_only;
-                chk2TONE.Enabled = !_rx_only && HardwareSpecific.Model != HPSDRModel.SUNSDR2DX; // MW0LGE_21a — 2TONE is PS-A-only, not supported on SunSDR
+                chk2TONE.Enabled = !_rx_only && !HardwareSpecific.IsCurrentSunSDRModel; // MW0LGE_21a — 2TONE is PS-A-only, not supported on SunSDR
                 chkVOX.Enabled = !_rx_only;
                 if (_rx_only && chkMOX.Checked)
                     chkMOX.Checked = false;
@@ -15952,7 +15978,7 @@ namespace Thetis
                     chkMOX.Enabled = !_tx_inhibit;
 
                 chkTUN.Enabled = !_tx_inhibit;
-                chk2TONE.Enabled = !_tx_inhibit && HardwareSpecific.Model != HPSDRModel.SUNSDR2DX; //MW0LGE_21a — 2TONE is PS-A-only, not supported on SunSDR
+                chk2TONE.Enabled = !_tx_inhibit && !HardwareSpecific.IsCurrentSunSDRModel; //MW0LGE_21a — 2TONE is PS-A-only, not supported on SunSDR
                 chkVOX.Enabled = !_tx_inhibit;
 
                 if ((_rx1_dsp_mode == DSPMode.CWL ||
@@ -21285,7 +21311,7 @@ namespace Thetis
             set
             {
                 xvtr_present = value;
-                bool sunsdr = HardwareSpecific.Model == HPSDRModel.SUNSDR2DX;
+                bool sunsdr = HardwareSpecific.IsCurrentSunSDRModel;
                 radBand2.Enabled = value || sunsdr;
                 //   Hdw.XVTRPresent = value;
                 if (sunsdr)
@@ -25841,7 +25867,7 @@ namespace Thetis
             float refvoltage = 0;
             int adc_cal_offset = 0;
 
-            // SunSDR2 DX forward-power calibration.
+            // SunSDR family forward-power calibration.
             //
             // Telemetry u16 at packet bytes 14-15 is a directional-coupler
             // voltage reading. Power is approximately V^2, so we fit a
@@ -25854,6 +25880,10 @@ namespace Thetis
             // measurement fall back to 20m's coefficients (mid-HF, confirmed
             // accurate, best single-band default).
             //
+            // PRO note: cal table currently anchored on SunSDR2 DX measurements.
+            // PRO may share the response curve closely (same coupler family) or
+            // need its own table — TBD with PRO testers' wattmeter sweeps.
+            //
             // To add a new band's calibration:
             //   1. TUNE on the new band, sweep drive 5-95 W in ~10 steps.
             //   2. Record (Artemis_displayed, LP-500_actual) pairs.
@@ -25861,7 +25891,7 @@ namespace Thetis
             //      the raw adc using the 20m formula).
             //   4. Least-squares fit watts_LP500 = K*(adc - C)^2 over all pairs.
             //   5. Add a case to GetSunsdrPwrCal below.
-            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
+            if (HardwareSpecific.IsCurrentSunSDRModel)
             {
                 adc = NetworkIO.getFwdPower();
                 (double K, double C) cal = GetSunsdrPwrCal(_tx_band);
@@ -28333,7 +28363,7 @@ namespace Thetis
                 {
                     chkMOX.Enabled = true;
                     chkTUN.Enabled = true;
-                    chk2TONE.Enabled = HardwareSpecific.Model != HPSDRModel.SUNSDR2DX; //MW0LGE_21a — 2TONE is PS-A-only, not supported on SunSDR
+                    chk2TONE.Enabled = !HardwareSpecific.IsCurrentSunSDRModel; //MW0LGE_21a — 2TONE is PS-A-only, not supported on SunSDR
                 }
                 chkVFOLock.Enabled = true;
                 chkVFOBLock.Enabled = true;
@@ -29647,7 +29677,7 @@ namespace Thetis
             // paths and just push the state to the radio via OP 0x05.
             // state index maps to wire byte: 0 -> 0x80 (-20 dB atten),
             // 1 -> 0x81 (-10 dB), 2 -> 0x82 (bypass), 3 -> 0x83 (+10 dB preamp).
-            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
+            if (HardwareSpecific.IsCurrentSunSDRModel)
             {
                 int sunsdrState = -1;
                 switch (comboPreamp.Text)
@@ -42458,6 +42488,7 @@ namespace Thetis
                     comboPreamp.Items.AddRange(anan100d_preamp_settings);
                     break;
                 case HPSDRModel.SUNSDR2DX:
+                case HPSDRModel.SUNSDR2PRO:
                     // Four-state cycle: +10 dB preamp / 0 / -10 / -20. Wire
                     // delivery is handled in comboPreamp_SelectedIndexChanged
                     // via nativeSunSDRSetPreampAtt (OP 0x05). See
@@ -47486,7 +47517,7 @@ namespace Thetis
                 // B2M is globally classified as BandType.VHF which would
                 // swap the panel to the legacy XVTR VHF slots and hide
                 // our 2 button. Keep the HF panel visible instead.
-                if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX &&
+                if (HardwareSpecific.IsCurrentSunSDRModel &&
                     newBand == Band.B2M)
                     bt = BandType.HF;
 
@@ -47655,7 +47686,7 @@ namespace Thetis
             // button to engage external PA control whenever they want.
             // (The HPSDR path still gates visibility on OC Control pin
             //  configuration as before.)
-            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
+            if (HardwareSpecific.IsCurrentSunSDRModel)
                 bShow = true;
 
             if (bShow)
