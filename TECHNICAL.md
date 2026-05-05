@@ -5,7 +5,7 @@ Engineering-level notes for contributors. User-facing documentation lives in [Re
 ## Architecture
 
 ```
-SunSDR2 DX                              ArtemisSDR (this fork)
+SunSDR2 (DX or PRO)                     ArtemisSDR (this fork)
 +-----------+     UDP 50001              +------------------+
 |  Control  |<-------------------------->| sunsdr.c         |
 |  Port     |  power-on macro, freq,     | (protocol impl)  |
@@ -13,9 +13,9 @@ SunSDR2 DX                              ArtemisSDR (this fork)
 +-----------+                            +------------------+
 +-----------+     UDP 50002              +------------------+
 |  IQ       |<-------------------------->| SunSDRReadThread |
-|  Stream   |  RX: 1210-byte IQ pkts     | resample 312k→   |
-|           |  TX: host IQ audio +       | 384k → xrouter   |
-|           |       keepalive packets    | → WDSP           |
+|  Stream   |  RX: 1210-byte IQ pkts     | DX:  312k native |
+|           |  TX: host IQ audio +       | PRO: 312k→384k   |
+|           |       keepalive packets    | → xrouter → WDSP |
 +-----------+                            +------------------+
                                                   |
                                          +--------v---------+
