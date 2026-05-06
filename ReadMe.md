@@ -2,7 +2,7 @@
 
 *Open source. Native protocol. Dedicated to Artemis II.*
 
-**Current version: v2.1.0**
+**Current version: v2.1.1**
 
 ⬇️ [**Download Latest Release**](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  📘 [**Quick Start Guide**](START_HERE.md)  ·  📝 [What's new](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  💬 [Discussions](https://github.com/kk68/ArtemisSDR/discussions)  ·  🐛 [Issues](https://github.com/kk68/ArtemisSDR/issues)
 
@@ -12,7 +12,23 @@
 
 ArtemisSDR is maintained by Kosta Kanchev (K0KOZ). It is a fork of [Thetis](https://github.com/ramdor/Thetis) by Richard Samphire (MW0LGE), which itself descends from OpenHPSDR (Doug Wigley, W5WC) and PowerSDR (FlexRadio Systems). Specialized for the SunSDR2 family (DX + PRO) and released under GPL v2.
 
-### What's new in v2.1.0
+### What's new in v2.1.1
+
+**TX wire-encoder cleanup pass.** A focused round of bench-validated changes to the SunSDR TX path that pushes close-in spurs (visible at ±2-15 kHz from carrier on a separate receiver) substantially down. Mic-side voice MOX in particular shows visibly cleaner spectrum. Five coordinated changes:
+
+- **Resampler upgraded from boxcar to 257-tap Hamming-windowed sinc FIR.** The prior boxcar averager (192k → 39 062.5 Hz wire decimation) had only ~13 dB stopband attenuation. The new FIR is tightened to a 4 kHz baseband cutoff with ~52 dB stopband from ~5.2 kHz, doubling as a brick-wall baseband cleanup filter that suppresses out-of-band content above the SSB voice intelligibility band.
+- **Mode-aware IqGain.** TUNE keeps its 1.167 multiplier (cal anchors locked to this gain), but voice MOX drops to 1.0. Voice peaks now top out at ~0.90 instead of pushing past 1.0 — eliminating routine quantizer hard-clipping that was generating IMD3/IMD5 between voice frequency components on multi-tone speech content.
+- **Soft-knee tanh envelope limiter** (replaces the prior hard envelope clamp; HF and VHF). The old hard clamp at |IQ|=1.0 was fine for steady-state TUNE but acted as a brick-wall limiter on voice transients, generating audible IMD on its own. The new C^∞-smooth tanh transition above 0.97 compresses peaks gradually with continuous derivative — no abrupt limiting, no IMD generation from the limiter itself.
+- **HF envelope clamp generalised from VHF-only.** The phase-preserving envelope clamp at |IQ|>1.0 now applies to all bands, not just VHF. Catches the rare cases where the soft-knee asymptote rounds slightly above the boundary.
+- **TX peak-distribution histogram in `TX_ATTEMPT_END` debug log.** New `peakHist=A/B/C/D/E/F` field tracks how many post-IqGain samples land in each peak bucket per TX session. Diagnostic-only, gated on `SUNSDR_DEBUG_LOG_ENABLED`.
+
+**On-air result:** voice MOX spurs from quantizer hard-clipping (3rd/5th-harmonic IMD between voice frequencies) are gone. Spurs at >4 kHz from carrier are suppressed by the new baseband filter. The remaining residual at 2-3 kHz from carrier on the opposite-sideband side is fundamental WDSP TXA modulator imbalance — the canonical PS-A use case, queued for the LP-500 sense-port retrofit work.
+
+**Voice character note:** the 4 kHz baseband cutoff lightly attenuates audio content above 3 kHz. Standard SSB voice (200-3000 Hz intelligibility band) is unaffected; ESSB enthusiasts running 4-5 kHz audio profiles may notice a slightly darker high end. The wider 18 kHz cutoff can be restored via `SUNSDR_TX_FIR_CUTOFF_HZ` if needed.
+
+**No DX/PRO behaviour changes outside the TX wire encoder.** RX path, panadapter, mode/filter/antenna handling, cmASIO, VAC, PA control, hardware PTT — all unchanged from v2.1.0.
+
+### What was new in v2.1.0
 
 **Native SunSDR2 PRO support.** ArtemisSDR now drives both SunSDR2 DX *and* SunSDR2 PRO from the same release. Built on Dmitry @Tort1k558's contribution PR #30 — first external community contribution to ArtemisSDR. Discovery, model auto-detection, profile-table dispatch, and the bring-up paths are all in place. PRO support is in **preview**: validated on a SunSDR2 DX (no DX regressions), but the PRO-side bring-up needs more on-air time. PRO users running v2.1.0 are encouraged to file issues at https://github.com/kk68/ArtemisSDR/issues.
 

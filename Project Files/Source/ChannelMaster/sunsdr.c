@@ -1157,6 +1157,87 @@ static sunsdr_resampler_state_t resampler[2];
 #define SUNSDR_TX_OUTPUT_RATE  39062.5
 #define SUNSDR_TX_RESAMPLE_STEP (SUNSDR_TX_INPUT_RATE / SUNSDR_TX_OUTPUT_RATE)  /* ~4.9152 */
 
+/* TX baseband cleanup FIR design parameters.
+ *
+ * Original cutoff was 18 kHz (anti-alias only — leave most of the
+ * 0..19.5 kHz Nyquist passband intact). After bench validation
+ * showed close-in spurs at 2-8 kHz from carrier despite the soft-
+ * knee limiter not firing on voice (peakHist data confirmed voice
+ * peaks max at 0.90), we tightened the cutoff to 4 kHz. The 4 kHz
+ * cutoff sits just above the SSB voice intelligibility band
+ * (200..3000 Hz) — 257 Hamming taps deliver a ~2.46 kHz transition
+ * width so the passband is flat to ~2.77 kHz and the stopband
+ * (~52 dB attenuation) starts at ~5.23 kHz.
+ *
+ * Trade-off: voice content from 3..5 kHz gets progressively
+ * attenuated. SSB voice intelligibility is preserved; the audio
+ * just sounds slightly "darker" at the high end (less hiss /
+ * sibilance / breath). The user's WDSP TXA bandpass (3 kHz profile)
+ * already restricts audio there, so this filter mostly enforces a
+ * sharper edge than WDSP delivers.
+ *
+ * The wider value (e.g., 18 kHz) can be restored if voice quality
+ * impact outweighs the spur cleanup. See sunsdr_tx_fir_design(). */
+#define SUNSDR_TX_FIR_CUTOFF_HZ  4000.0
+
+/* Local PI — math.h is included but MSVC needs _USE_MATH_DEFINES before
+ * the include for M_PI to be defined, and we don't want to fiddle with
+ * compile-time defines for one constant. */
+#ifndef SUNSDR_PI
+#define SUNSDR_PI 3.14159265358979323846
+#endif
+
+static double sunsdr_tx_fir_coeffs[SUNSDR_TX_FIR_TAPS];
+static int sunsdr_tx_fir_designed = 0;
+
+/* Design a 65-tap Hamming-windowed sinc low-pass FIR. Called lazily on
+ * the first TX outbound; idempotent via the sunsdr_tx_fir_designed flag.
+ *
+ * Anti-alias bandwidth advantage vs the prior boxcar:
+ *   Boxcar (~5-sample average): main lobe to first null at ~39 kHz;
+ *     sidelobes attenuated only ~13 dB (sin(πfN)/(N sin(πf)) shape).
+ *   This FIR: passband flat to 18 kHz; transition 18-19.5 kHz;
+ *     stopband ≥19.5 kHz down ≥50 dB.
+ *
+ * Cost: 65 multiply-adds per output × 2 (I+Q) × 39 062.5 outputs/sec ≈
+ * 5 M MACs/sec. <0.5% of one core on modern hardware.
+ *
+ * The taps are normalised so sum-of-coeffs = 1.0 → unity DC gain (so
+ * a steady DC input passes through with magnitude 1.0, matching the
+ * boxcar's behaviour on DC). */
+static void sunsdr_tx_fir_design(void) {
+    int n;
+    double sum;
+    const double normalized_cutoff = SUNSDR_TX_FIR_CUTOFF_HZ / SUNSDR_TX_INPUT_RATE; /* 0.09375 */
+    const double center = ((double)SUNSDR_TX_FIR_TAPS - 1.0) / 2.0;
+
+    if (sunsdr_tx_fir_designed) return;
+
+    sum = 0.0;
+    for (n = 0; n < SUNSDR_TX_FIR_TAPS; n++) {
+        double m = (double)n - center;
+        double sinc;
+        double window;
+        if (m == 0.0) {
+            sinc = 2.0 * normalized_cutoff;
+        } else {
+            double x = 2.0 * SUNSDR_PI * normalized_cutoff * m;
+            sinc = sin(x) / (SUNSDR_PI * m);
+        }
+        /* Hamming: 0.54 - 0.46 * cos(2π n / (N-1)). */
+        window = 0.54 - 0.46 * cos(2.0 * SUNSDR_PI * (double)n / (double)(SUNSDR_TX_FIR_TAPS - 1));
+        sunsdr_tx_fir_coeffs[n] = sinc * window;
+        sum += sunsdr_tx_fir_coeffs[n];
+    }
+    /* Normalise to unity DC gain. */
+    if (sum != 0.0) {
+        for (n = 0; n < SUNSDR_TX_FIR_TAPS; n++) {
+            sunsdr_tx_fir_coeffs[n] /= sum;
+        }
+    }
+    sunsdr_tx_fir_designed = 1;
+}
+
 /*
  * Resample nsamples complex pairs from in[] to resample_out[].
  * Returns number of complex output samples produced.
@@ -1282,6 +1363,20 @@ static ULONGLONG sunsdr_dbg_tx_cb_max_gap_ms = 0;
 static LARGE_INTEGER sunsdr_dbg_tx_cb_last_qpc = {0};
 static volatile LONG sunsdr_dbg_tx_cb_gap_hist[SDR_TX_CB_HIST_BUCKETS] = {0};
 
+/* Post-gain peak histogram for TX clipping/limiter diagnostics.
+ * Captured per-sample BEFORE the soft-knee limiter — tells us how
+ * often WDSP+IqGain produces samples in each peak bucket.
+ *
+ * Buckets:
+ *   [0] <0.50         normal voice / silence
+ *   [1] 0.50..0.85    active speech below limiter threshold
+ *   [2] 0.85..0.95    compressor working at its limit
+ *   [3] 0.95..1.00    soft-knee considering / firing on TUNE peaks
+ *   [4] 1.00..1.07    soft-knee firing harder (would-have-clipped)
+ *   [5] >=1.07        severe over-drive (should never happen post-fix) */
+#define SDR_TX_PEAK_HIST_BUCKETS 6
+static volatile LONG sunsdr_dbg_tx_peak_hist[SDR_TX_PEAK_HIST_BUCKETS] = {0};
+
 static const char* sunsdr_tx_mode_label(int tune)
 {
     return tune ? "TUNE" : "MOX";
@@ -1315,6 +1410,11 @@ static void sunsdr_dbg_reset_tx_attempt_locked(int attempt_id)
     InterlockedExchange(&sunsdr_dbg_tx_cb_vhf_clamp, 0);
     sunsdr_dbg_tx_cb_last_tick = 0;
     sunsdr_dbg_tx_cb_max_gap_ms = 0;
+    {
+        int b;
+        for (b = 0; b < SDR_TX_PEAK_HIST_BUCKETS; b++)
+            InterlockedExchange(&sunsdr_dbg_tx_peak_hist[b], 0);
+    }
 }
 
 static void sunsdr_dbg_log_audio_diags(const char* label)
@@ -1499,7 +1599,29 @@ static void sunsdr_dbg_note_tx_packet(unsigned int seq)
  * we are done.
  */
 #define SUNSDR_WDSP_TX_PEAK_EST 0.857   /* measured from diagnostic log */
-#define SUNSDR_TX_IQ_GAIN       (1.0 / SUNSDR_WDSP_TX_PEAK_EST) /* ~1.167 */
+#define SUNSDR_TX_IQ_GAIN       (1.0 / SUNSDR_WDSP_TX_PEAK_EST) /* ~1.167 — TUNE */
+
+/* Voice MOX IqGain: 1.0, no amplitude boost.
+ *
+ * Background: TUNE is a pure 600 Hz postgen tone with predictable
+ * peak ~0.857 — IqGain=1.167 lands wire peak at 1.0 cleanly with no
+ * over-drive. Voice is a compressed multi-tone signal whose peak
+ * structure is fundamentally different — typical voice with active
+ * CFC produces transient peaks at 0.92-0.98 (5-15% of samples). At
+ * IqGain=1.167 those samples push past 1.0 routinely, and even with
+ * a soft-knee limiter the *brick-wall-style* repeated limiting on
+ * multi-tone content generates IMD3/IMD5 between voice frequency
+ * components → broadband close-in spur haze near the carrier.
+ *
+ * The right fix on voice is to give peaks headroom rather than try
+ * to limit them after the fact. IqGain=1.0 means voice peak ~0.95
+ * lands at wire peak ~0.95 with no limiting required. The trade-off
+ * is ~1.4 dB lower wire amplitude on voice; user compensates via the
+ * drive byte. TUNE keeps the original 1.167 because TUNE peak structure
+ * is steady-state and the existing drive cal anchors are TUNE-tuned.
+ *
+ * Same approach as ArtemisSDR-Next: drop IqGain to 1.0 for voice path. */
+#define SUNSDR_TX_IQ_GAIN_VOICE  1.0
 
 static double sunsdr_requested_watts_from_raw(int raw)
 {
@@ -1510,11 +1632,16 @@ static double sunsdr_requested_watts_from_raw(int raw)
 
 static double sunsdr_tx_iq_gain_for_watts(double watts)
 {
-    /* Wire IQ amplitude is no longer the power dial under the new
-     * architecture. It is a constant normalization so our wire peak
-     * matches EESDR's ~1.0. Returns 0 only when TX is commanded off. */
+    /* Mode-aware wire IQ amplitude normalization. Returns 0 only when TX
+     * is commanded off. */
     if (watts <= 0.0) return 0.0;
-    return SUNSDR_TX_IQ_GAIN;
+    /* TUNE uses the TUNE-calibrated 1.167 to land postgen peak at wire 1.0
+     * (matches EESDR captures, drive cal anchors locked to this gain).
+     * Voice MOX uses 1.0 to give peak headroom that prevents IMD-from-
+     * limiting on compressed multi-tone audio content. */
+    if (sdr.currentTune)
+        return SUNSDR_TX_IQ_GAIN;
+    return SUNSDR_TX_IQ_GAIN_VOICE;
 }
 
 static struct sockaddr_in sunsdr_stream_dest(void)
@@ -1701,12 +1828,20 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
 
     /*
      * Downsampling resampler: Fin=192 kHz -> Fout=39.0625 kHz (ratio ~4.9152).
-     * Boxcar-average every ~4.9 input samples into one output, then emit when
-     * phase crosses 1.0. The boxcar provides an anti-aliasing low-pass that
-     * suppresses WDSP TX spectral skirts above 19.5 kHz (our output Nyquist).
-     * Without this, high-frequency content aliases into the voice band as the
-     * characteristic "raspy" distortion heard on-air.
+     *
+     * Walk input samples; on each input increment a phase accumulator by
+     * step_out_per_in. Whenever phase >= 1.0, convolve the 65-tap Hamming-
+     * windowed sinc (sunsdr_tx_fir_coeffs) against the IQ history ring,
+     * emit one output IQ pair, and decrement phase by 1.0.
+     *
+     * The FIR replaces an earlier boxcar averager (~5-sample running mean)
+     * which had only ~13 dB stopband attenuation — content above the output
+     * Nyquist (19.531 kHz) aliased back into the voice band as visible
+     * close-in spurs near the carrier. The 65-tap FIR gives ~50 dB stopband.
+     * See sunsdr_tx_fir_design() for the math + project_ghost_signals_26.md
+     * for the spur investigation that motivated the swap.
      */
+    sunsdr_tx_fir_design();
     const double step_out_per_in = 1.0 / SUNSDR_TX_RESAMPLE_STEP;  /* ~0.2035 */
 
     for (i = 0; i < nsamples; i++) {
@@ -1719,18 +1854,58 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
         double in_mag = sqrt(in_I * in_I + in_Q * in_Q);
         double out_mag = sqrt(cur_I * cur_I + cur_Q * cur_Q);
 
-        /* VHF wire-IQ clamp: the 2m PA and its forward-power detector
-         * misbehave when wire |IQ| exceeds 1.0 (on-air splatter +
-         * u16[3] forward-power telemetry collapses to 0). Observed
-         * 2026-04-20: mid-session WDSP TUNE amplitude drifted so that
-         * post-gain peak hit 1.046. Clamp envelope to 1.0 on VHF only
-         * (HF stays wide open — its amplitude calibration is locked).
-         * Phase-preserving magnitude scale. */
-        if (sdr.currentBandIsVhf && out_mag > 1.0) {
-            double scale = 1.0 / out_mag;
+        /* Per-sample post-gain peak histogram (diagnostic for clipping +
+         * limiter behavior). Captures out_mag BEFORE limiter runs —
+         * tells us how often WDSP+IqGain produces samples in each peak
+         * bucket. Useful for verifying voice-MOX peak distribution and
+         * for tracking down PS-A baseline cleanliness. */
+        {
+            int bucket;
+            if (out_mag < 0.50)      bucket = 0;
+            else if (out_mag < 0.85) bucket = 1;
+            else if (out_mag < 0.95) bucket = 2;
+            else if (out_mag < 1.00) bucket = 3;
+            else if (out_mag < 1.07) bucket = 4;
+            else                     bucket = 5;
+            InterlockedIncrement(&sunsdr_dbg_tx_peak_hist[bucket]);
+        }
+
+        /* Soft-knee envelope limiter (broadcast-audio standard).
+         *
+         * Above threshold, magnitude is smoothly compressed via tanh
+         * (asymptotically approaches ceiling 1.0 with C^∞ smoothness —
+         * no audible "edge" at the knee point). Below threshold:
+         * pass-through. Phase-preserving (scales |IQ| while preserving
+         * I/Q ratio).
+         *
+         * Why soft-knee instead of hard clamp:
+         *   - Hard clamp on a complex modulated signal generates IMD3/
+         *     IMD5 between voice frequency components → broadband
+         *     close-in spur haze near carrier.
+         *   - Soft-knee compresses peaks GRADUALLY with continuous
+         *     derivative → no abrupt limiting → far less IMD generation
+         *     from the limiter itself.
+         *
+         * Threshold 0.97 chosen so:
+         *   - TUNE (post-IqGain peak ~1.0) gets compressed to ~0.998:
+         *     0.02% amplitude loss, inaudible. Drive-cal preserved.
+         *   - Voice MOX (IqGain=1.0, peak <0.95): below threshold,
+         *     pass-through. No compression on voice except for
+         *     accidental over-drive.
+         *
+         * Counter name retained for diagnostic-log compatibility. */
+        const double LIM_THRESHOLD = 0.97;
+        const double LIM_RANGE = 1.0 - LIM_THRESHOLD;  /* = 0.03 */
+        if (out_mag > LIM_THRESHOLD) {
+            double over = out_mag - LIM_THRESHOLD;
+            double soft_mag = LIM_THRESHOLD + LIM_RANGE * tanh(over / LIM_RANGE);
+            /* Hard backstop — tanh asymptotes to ceiling but for safety
+             * against floating-point rounding pushing slightly above. */
+            if (soft_mag > 1.0) soft_mag = 1.0;
+            double scale = soft_mag / out_mag;
             cur_I *= scale;
             cur_Q *= scale;
-            out_mag = 1.0;
+            out_mag = soft_mag;
             InterlockedIncrement(&sunsdr_dbg_tx_cb_vhf_clamp);
         }
 
@@ -1740,20 +1915,30 @@ static void sunsdr_tx_outbound(int id, int nsamples, double* buff)
         pre_sum_sq += (in_I * in_I) + (in_Q * in_Q);
         post_sum_sq += (cur_I * cur_I) + (cur_Q * cur_Q);
 
-        /* Accumulate into the current output window. */
-        sdr.txAccumBoxI += cur_I;
-        sdr.txAccumBoxQ += cur_Q;
-        sdr.txAccumBoxN += 1;
+        /* Push (cur_I, cur_Q) into the FIR ring. After this increment
+         * txFirPos points at the OLDEST sample (the slot about to be
+         * overwritten on the next push), which is also the slot that
+         * pairs with coefficient h[0] when we convolve. */
+        sdr.txFirHistoryI[sdr.txFirPos] = cur_I;
+        sdr.txFirHistoryQ[sdr.txFirPos] = cur_Q;
+        sdr.txFirPos = (sdr.txFirPos + 1) % SUNSDR_TX_FIR_TAPS;
 
         sdr.txPhase += step_out_per_in;
         if (sdr.txPhase >= 1.0) {
-            double out_I = sdr.txAccumBoxI / (double)sdr.txAccumBoxN;
-            double out_Q = sdr.txAccumBoxQ / (double)sdr.txAccumBoxN;
-            sunsdr_queue_tx_packet_locked(out_I, out_Q);
-
-            sdr.txAccumBoxI = 0.0;
-            sdr.txAccumBoxQ = 0.0;
-            sdr.txAccumBoxN = 0;
+            /* 65-tap convolution: h[0] pairs with the oldest sample
+             * (at txFirPos), h[N-1] pairs with the most-recent sample
+             * (one slot before txFirPos). Walk forward through the
+             * ring starting at txFirPos. */
+            double accI = 0.0;
+            double accQ = 0.0;
+            int p = sdr.txFirPos;
+            int j;
+            for (j = 0; j < SUNSDR_TX_FIR_TAPS; j++) {
+                accI += sunsdr_tx_fir_coeffs[j] * sdr.txFirHistoryI[p];
+                accQ += sunsdr_tx_fir_coeffs[j] * sdr.txFirHistoryQ[p];
+                p = (p + 1) % SUNSDR_TX_FIR_TAPS;
+            }
+            sunsdr_queue_tx_packet_locked(accI, accQ);
             sdr.txPhase -= 1.0;
         }
 
@@ -3596,9 +3781,13 @@ void SunSDRSetPTT(int ptt)
             sdr.txPrevI = 0.0;
             sdr.txPrevQ = 0.0;
             sdr.txAccumCount = 0;
-            sdr.txAccumBoxI = 0.0;
-            sdr.txAccumBoxQ = 0.0;
-            sdr.txAccumBoxN = 0;
+            /* Clear FIR history — old samples from a prior TX session
+             * must not bleed into the new one (otherwise the first
+             * 65 input samples convolve against stale state and the
+             * first emit is a transient artefact). */
+            memset(sdr.txFirHistoryI, 0, sizeof(sdr.txFirHistoryI));
+            memset(sdr.txFirHistoryQ, 0, sizeof(sdr.txFirHistoryQ));
+            sdr.txFirPos = 0;
             /* Reset the wire packet sequence counter to 0. EESDR reference
              * captures (voice MOX and TUNE) show the TX stream seq restarts
              * at 0 for every new TX session. Without this we were handing
@@ -3781,7 +3970,7 @@ void SunSDRSetPTT(int ptt)
             (unsigned long long)(sunsdr_dbg_first_fd_tick - sunsdr_dbg_mox_cmd_tick) : 0;
         int first_fd_before_cmd = (int)sunsdr_dbg_first_fd_before_cmd;
         InterlockedExchange(&sunsdr_tx_iq_enabled, 0);
-        sdr_logf("TX_ATTEMPT_END #%ld mode=%s result=user_clean_or_raspy ptt=%d tune=%d seq=%u txPackets=%u activeFD=%ld seqGaps=%ld feDuringTx=%ld keepaliveRaces=%ld iqGateSkips=%ld firstFdDelayMs=%llu firstFdBefore0x06=%d fdGapMin=%.3f fdGapAvg=%.3f fdGapMax=%.3f fdGapCount=%u txPhase=%.4f txAccum=%d txCb=%ld txCbSilent=%ld txCbNonfinite=%ld txCbRmsMin=%.6f txCbRmsAvg=%.6f txCbRmsMax=%.6f txCbPostPeakMax=%.6f txCbMaxGapMs=%llu vhfClamp=%ld\n",
+        sdr_logf("TX_ATTEMPT_END #%ld mode=%s result=user_clean_or_raspy ptt=%d tune=%d seq=%u txPackets=%u activeFD=%ld seqGaps=%ld feDuringTx=%ld keepaliveRaces=%ld iqGateSkips=%ld firstFdDelayMs=%llu firstFdBefore0x06=%d fdGapMin=%.3f fdGapAvg=%.3f fdGapMax=%.3f fdGapCount=%u txPhase=%.4f txAccum=%d txCb=%ld txCbSilent=%ld txCbNonfinite=%ld txCbRmsMin=%.6f txCbRmsAvg=%.6f txCbRmsMax=%.6f txCbPostPeakMax=%.6f txCbMaxGapMs=%llu vhfClamp=%ld peakHist=%ld/%ld/%ld/%ld/%ld/%ld\n",
             sunsdr_dbg_tx_attempt_id,
             sunsdr_tx_mode_label(sdr.lastTxWasTune),
             new_ptt,
@@ -3809,7 +3998,13 @@ void SunSDRSetPTT(int ptt)
             sunsdr_dbg_tx_cb_rms_max,
             sunsdr_dbg_tx_cb_peak_max,
             (unsigned long long)sunsdr_dbg_tx_cb_max_gap_ms,
-            sunsdr_dbg_tx_cb_vhf_clamp);
+            sunsdr_dbg_tx_cb_vhf_clamp,
+            sunsdr_dbg_tx_peak_hist[0],
+            sunsdr_dbg_tx_peak_hist[1],
+            sunsdr_dbg_tx_peak_hist[2],
+            sunsdr_dbg_tx_peak_hist[3],
+            sunsdr_dbg_tx_peak_hist[4],
+            sunsdr_dbg_tx_peak_hist[5]);
         sunsdr_dbg_log_audio_diags("END");
         /*
          * On MOX-off, only write 0x24 PA_ENABLE=0 if we had written a 1

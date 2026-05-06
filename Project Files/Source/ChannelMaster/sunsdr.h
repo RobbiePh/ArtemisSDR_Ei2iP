@@ -88,6 +88,33 @@ of the License, or (at your option) any later version.
 #define SUNSDR_IQ_COMPLEX_PER_PKT  200   /* 24-bit interleaved I/Q pairs */
 #define SUNSDR_IQ_BYTES_PER_IQ  6        /* 3 bytes I + 3 bytes Q */
 
+/* TX baseband cleanup FIR length. 257 taps, Hamming-windowed sinc,
+ * cutoff 4 kHz at 192 kHz input rate.
+ *
+ * Original purpose (replacing prior boxcar) was anti-aliasing for the
+ * 192k → 39 062.5 Hz wire resampler — a wide ~18 kHz cutoff was enough
+ * for that. After bench validation showed close-in spurs at 2-8 kHz
+ * from carrier even with the soft-knee limiter not firing on voice
+ * (peakHist confirms voice peaks max at 0.90, limiter never fires),
+ * the spurs were diagnosed as upstream artefacts from WDSP TXA
+ * (compressor IMD escaping the post-modulator bandpass + SSB modulator
+ * I/Q imbalance / image leakage).
+ *
+ * The aggressive 257-tap / 4 kHz design turns this filter into a
+ * brick-wall baseband cleanup filter:
+ *   Passband: 0..2.77 kHz (voice intelligibility band, full)
+ *   Transition: 2.77..5.23 kHz (~2.46 kHz wide, Hamming response)
+ *   Stopband: 5.23+ kHz (~52 dB attenuation)
+ * Spurs at >5 kHz from carrier get crushed by ~52 dB regardless of
+ * what's producing them in the WDSP chain.
+ *
+ * CPU: 257 MACs × 2 channels × 39 062.5 outputs/sec ≈ 20 M MACs/sec
+ * (~2% of one core). Convolution is at the OUTPUT rate (only fires
+ * when txPhase wraps), not the input rate, so the cost is bounded.
+ *
+ * See sunsdr_tx_fir_design() in sunsdr.c for coefficient generation. */
+#define SUNSDR_TX_FIR_TAPS  257
+
 /* DDC companion frequency offsets (Hz) */
 #define SUNSDR_DDC0_OFFSET_HZ   92500
 #define SUNSDR_DDC1_OFFSET_HZ   22000
@@ -217,10 +244,17 @@ typedef struct _sunsdr_state
     double txPrevI;
     double txPrevQ;
     int txAccumCount;
-    /* Boxcar anti-alias accumulator for TX downsampler (192k -> 39k). */
-    double txAccumBoxI;
-    double txAccumBoxQ;
-    int txAccumBoxN;
+    /* FIR anti-alias decimator state for TX downsampler (192k -> 39k).
+     * Replaces the prior boxcar (which had only ~13 dB stopband attenuation
+     * — WDSP TXA spectral content above 19.5 kHz output Nyquist aliased
+     * back into the voice band as visible close-in spurs). The 65-tap
+     * Hamming-windowed sinc gives ~50 dB stopband. Coefficients are
+     * designed once at first TX outbound call by sunsdr_tx_fir_design()
+     * and held in static module storage. The per-channel ring history is
+     * here in struct so PTT-on reset has direct access. */
+    double txFirHistoryI[SUNSDR_TX_FIR_TAPS];
+    double txFirHistoryQ[SUNSDR_TX_FIR_TAPS];
+    int txFirPos;
 
     /* IQ buffer (double pairs for xrouter) */
     double* rxBuf;
