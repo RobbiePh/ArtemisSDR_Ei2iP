@@ -2,7 +2,7 @@
 
 *Open source. Native protocol. Dedicated to Artemis II.*
 
-**Current version: v2.1.1**
+**Current version: v2.1.2**
 
 ⬇️ [**Download Latest Release**](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  📘 [**Quick Start Guide**](START_HERE.md)  ·  📝 [What's new](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  💬 [Discussions](https://github.com/kk68/ArtemisSDR/discussions)  ·  🐛 [Issues](https://github.com/kk68/ArtemisSDR/issues)
 
@@ -12,7 +12,17 @@
 
 ArtemisSDR is maintained by Kosta Kanchev (K0KOZ). It is a fork of [Thetis](https://github.com/ramdor/Thetis) by Richard Samphire (MW0LGE), which itself descends from OpenHPSDR (Doug Wigley, W5WC) and PowerSDR (FlexRadio Systems). Specialized for the SunSDR2 family (DX + PRO) and released under GPL v2.
 
-### What's new in v2.1.1
+### What's new in v2.1.2
+
+**Critical PRO Power-On fix (issue #38).** SunSDR2 PRO users on v2.1.0 / v2.1.1 saw "No radio detected" when clicking Power-On — even though discovery correctly listed the radio in H/W Select. Root cause: the pre-flight reachability check (added in v2.0.16) hardcoded the DX family byte (`0x32`) in its UDP firmware-manager probe. PRO radios use family byte `0x01` and silently ignored the wrong-family probe, so the pre-flight always timed out for PRO.
+
+The fix mirrors what the native sunsdr.c side already does: send the probe for every known SunSDR2 family byte (DX `0x32`, PRO `0x01`, plus four sibling reservations matching the discovery code's multi-family probe), and accept any reply. The radio replies to the one matching its family; the rest go ignored harmlessly.
+
+Thanks to **Jim W4JEA** and **Bernie F6Bernie** for catching this and to **Dmitry @Tort1k558** for the PRO testing relay.
+
+**No DX behaviour changes.** DX still gets its `0x32` reply on the first probe; the additional family bytes are sent but ignored by the DX. RX, TX, panadapter, waterfall, all v2.1.1 TX cleanup work — unchanged.
+
+### What was new in v2.1.1
 
 **TX wire-encoder cleanup pass.** A focused round of bench-validated changes to the SunSDR TX path that pushes close-in spurs (visible at ±2-15 kHz from carrier on a separate receiver) substantially down. Mic-side voice MOX in particular shows visibly cleaner spectrum. Five coordinated changes:
 

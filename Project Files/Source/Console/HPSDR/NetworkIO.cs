@@ -332,17 +332,43 @@ namespace Thetis
             // Step 2: UDP firmware-manager query (18-byte 0x1A opcode).
             // Radio reliably replies with a 0x1A response containing FW
             // version. Any reply at all = radio is alive and listening.
+            //
+            // Multi-family probe: send the 0x1A query for every known
+            // SunSDR2 family byte (DX = 0x32, PRO = 0x01, plus siblings
+            // 0x42 / 0x22 / 0x12 / 0x03 reserved per the discovery code
+            // in clsSunSDRDiscovery.cs::QueryFamilyBytes). The radio
+            // ignores probes whose first byte doesn't match its family;
+            // it replies to the one that does. We only need one reply
+            // to know the radio is alive.
+            //
+            // Why we have to do this: the native sunsdr.c equivalent
+            // (sunsdr_query_firmware_manager_version at sunsdr.c:4901)
+            // builds the packet with placeholder 0x32 then calls
+            // sunsdr_patch_magic() to rewrite the first byte to the
+            // connected radio's actual family. The pre-flight check
+            // here runs BEFORE the native side has set up its profile,
+            // so we don't know the family from the C side. Multi-probe
+            // is robust to that ordering and to future siblings.
+            //
+            // Issue #38 (PRO users "No radio detected" on Power-On)
+            // was caused by the prior single-family 0x32 probe — PRO
+            // radios ignored it and the pre-flight timed out.
             try
             {
                 using (UdpClient udp = new UdpClient())
                 {
                     udp.Client.ReceiveTimeout = 1000;
-                    byte[] probe = new byte[]
+                    // Match clsSunSDRDiscovery.cs::QueryFamilyBytes.
+                    byte[] familyBytes = new byte[] { 0x32, 0x01, 0x42, 0x22, 0x12, 0x03 };
+                    foreach (byte familyByte in familyBytes)
                     {
-                        0x32, 0xff, 0x1a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-                    };
-                    udp.Send(probe, probe.Length, radioIP, ctrlPort);
+                        byte[] probe = new byte[]
+                        {
+                            familyByte, 0xff, 0x1a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+                        };
+                        udp.Send(probe, probe.Length, radioIP, ctrlPort);
+                    }
                     IPEndPoint sender = null;
                     udp.Receive(ref sender);
                     return true;
