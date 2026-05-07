@@ -1084,19 +1084,40 @@ namespace Thetis
 				{
                     if (value != rx_output_gain_dsp || force)
 					{
-                        WDSP.SetRXAPanelGain1(WDSP.id(thread, subrx), value);
+                        // SunSDR2 issue #40: AF / volume slider now controls
+                        // the speaker mixer input rather than the WDSP RXA
+                        // panel gain. That keeps VAC, TCI and the WAV recorder
+                        // at a fixed DSP level so digital decoders no longer
+                        // need ~50% AF to receive usable audio.
+                        //
+                        // WDSP panel gain stays pinned at 1.0 unconditionally.
+                        // Earlier draft tried to forward value==0 through to
+                        // WDSP to keep the legacy "Mute will mute VAC1" option
+                        // working, but that path also fires when the user
+                        // simply drags AF to 0 — silencing JTDX / Decodium /
+                        // any digital app, which is exactly the bug we're
+                        // fixing. The legacy mute-VAC option was itself a
+                        // workaround for this coupling and is now inert; users
+                        // wanting VAC silenced should toggle VAC1 enable
+                        // directly.
+                        int channel_id = WDSP.id(thread, subrx);
+                        cmaster.SetRXOutputGain(channel_id, value);
+                        WDSP.SetRXAPanelGain1(channel_id, 1.0);
 						rx_output_gain_dsp = value;
 
-                        //[2.10.3.5]MW0LGE wave recorder volume normalise
-                        switch(WDSP.id(thread, subrx))
+                        // Wave recorder pulls from pipe.c's rbuff which is
+                        // now full-DSP-level; the recorder's internal inverse
+                        // gain stays at 1.0 so quiet-AF recordings don't get
+                        // over-amplified.
+                        switch(channel_id)
                         {
                             case 0: //rx1 sub0
                                 if (WaveThing.wave_file_writer[0] != null)
-                                    WaveThing.wave_file_writer[0].RecordGain = (float)value;
+                                    WaveThing.wave_file_writer[0].RecordGain = 1.0f;
                                 break;
                             case 2: //rx2 sub0
                                 if (WaveThing.wave_file_writer[1] != null)
-                                    WaveThing.wave_file_writer[1].RecordGain = (float)value;
+                                    WaveThing.wave_file_writer[1].RecordGain = 1.0f;
                                 break;
                         }
                     }

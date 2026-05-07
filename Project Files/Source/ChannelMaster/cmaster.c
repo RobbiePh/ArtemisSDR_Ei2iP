@@ -469,6 +469,20 @@ void SetTXTCIAudio (int txid, int active)
 }
 
 PORT
+void SetRXOutputGain (int channel, double gain)
+{
+	// Per-input gain on the speaker mixer (aamix id 0). The user's RX AF /
+	// volume slider used to call WDSP's SetRXAPanelGain1, which scales the
+	// audio inside the RXA pipeline before xpipe taps it for VAC, TCI and
+	// the WAV recorder. That coupled the digital feed to the operator's
+	// listening volume (issue #40 — Decodium / JTDX / FLDIGI couldn't
+	// decode unless AF was somewhere near 50%). By moving the gain to this
+	// mixer's input, the speaker still tracks the slider but VAC + TCI +
+	// recorder receive a fixed DSP-level signal.
+	SetAAudioMixVol (0, 0, channel, gain);
+}
+
+PORT
 void SetRunPanadapter (int id, int run)
 {
 	_InterlockedExchange (&pcm->rcvr[id].run_pan, run);

@@ -259,6 +259,11 @@ namespace Thetis
         [DllImport("ChannelMaster.dll", EntryPoint = "SetTXTCIAudio", CallingConvention = CallingConvention.Cdecl)]
         public static extern void SetTXTCIAudio(int txid, int active);
 
+        // Speaker AF gain — replaces SetRXAPanelGain1 in the AF-slider path so
+        // VAC, TCI and the WAV recorder see fixed-DSP-level RX audio (issue #40).
+        [DllImport("ChannelMaster.dll", EntryPoint = "SetRXOutputGain", CallingConvention = CallingConvention.Cdecl)]
+        public static extern void SetRXOutputGain(int channel, double gain);
+
         [DllImport("ChannelMaster.dll", EntryPoint = "SetTCIRxAudioMox", CallingConvention = CallingConvention.Cdecl)]
         public static extern void SetTCIRxAudioMox(int id, int mox);
 
@@ -1030,13 +1035,17 @@ namespace Thetis
                 case 0:
                     run =  Audio.WaveRecord
                         && WaveThing.wave_file_writer[0] != null;
-                    if (run) WaveThing.wave_file_writer[0].RecordGain = (float)Audio.console.radio.GetDSPRX(0, 0).RXOutputGain; //[2.10.3.5]MW0LGE
+                    // SunSDR2 issue #40: AF gain no longer scales the audio
+                    // before pipe.c, so the wave recorder's inverse-gain
+                    // compensation must stay at 1.0 (otherwise quiet AF
+                    // settings would over-amplify recordings).
+                    if (run) WaveThing.wave_file_writer[0].RecordGain = 1.0f;
                     break;
                 case 1:
                     run = Audio.WaveRecord
                         && WaveThing.wave_file_writer[1] != null
                         && Audio.console.RX2Enabled;
-                    if (run) WaveThing.wave_file_writer[1].RecordGain = (float)Audio.console.radio.GetDSPRX(1, 0).RXOutputGain; //[2.10.3.5]MW0LGE
+                    if (run) WaveThing.wave_file_writer[1].RecordGain = 1.0f;
                     break;
             }
             WaveThing.SetWaveRecorderRun(id, run ? 1 : 0); //[2.10.3.4]MW0LGE

@@ -3196,8 +3196,11 @@ namespace Thetis
                 _xmtr_size = cmaster.GetChannelOutputSize(1, 0);
             }
 
-            if (wfw_id == 0) RecordGain = (float)Audio.console.radio.GetDSPRX(0, 0).RXOutputGain;
-            else if (wfw_id == 1) RecordGain = (float)Audio.console.radio.GetDSPRX(1, 0).RXOutputGain;
+            // SunSDR2 issue #40: AF / volume slider now controls the speaker
+            // mixer, not the WDSP RXA panel gain, so pipe.c hands the recorder
+            // a buffer that's already at full DSP level. Inverse compensation
+            // would now over-amplify quiet-AF recordings.
+            RecordGain = 1.0f;
 
             _channels = chan;
             _format_tag = formatTag;

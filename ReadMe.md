@@ -2,7 +2,7 @@
 
 *Open source. Native protocol. Dedicated to Artemis II.*
 
-**Current version: v2.1.2**
+**Current version: v2.1.3**
 
 ⬇️ [**Download Latest Release**](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  📘 [**Quick Start Guide**](START_HERE.md)  ·  📝 [What's new](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  💬 [Discussions](https://github.com/kk68/ArtemisSDR/discussions)  ·  🐛 [Issues](https://github.com/kk68/ArtemisSDR/issues)
 
@@ -12,7 +12,28 @@
 
 ArtemisSDR is maintained by Kosta Kanchev (K0KOZ). It is a fork of [Thetis](https://github.com/ramdor/Thetis) by Richard Samphire (MW0LGE), which itself descends from OpenHPSDR (Doug Wigley, W5WC) and PowerSDR (FlexRadio Systems). Specialized for the SunSDR2 family (DX + PRO) and released under GPL v2.
 
-### What's new in v2.1.2
+### What's new in v2.1.3
+
+**VAC / TCI RX audio decoupled from RX AF slider (issue #40).** Reported by **Scott VK4SHG** and reproduced locally with JTDX: digital-mode decoders (Decodium, JTDX, FLDIGI, WSJT-X via VAC1, TCI clients) only worked when the RX1 AF slider was somewhere near 50%. Drop AF to listen quietly — decoders stopped decoding. Push AF up to listen loudly — decoders saw clipped audio.
+
+Root cause: the AF / volume slider was wired straight into WDSP's RXA panel gain (`SetRXAPanelGain1`), which scales the audio inside WDSP's pipeline *before* the point where VAC, TCI and the WAV recorder tap it. So the operator's listening volume was effectively the master input gain for every digital downstream consumer.
+
+**The fix** moves the AF slider to the speaker mixer's per-input gain (`SetAAudioMixVol` on cmaster's audio mixer 0) and pins WDSP's RXA panel gain at 1.0. Net effect:
+
+- **VAC1, VAC2, TCI RX, and the WAV recorder** now receive a fixed DSP-level audio stream regardless of where the AF slider sits. Set AF for what you want to hear; set VAC RX Gain (Setup → VAC → RX Gain) for what your decoder hears. They finally do separate things.
+- **Speaker / headphone path** is unchanged in feel — the AF slider still controls listening volume the way it always has, just applied at the mixer instead of inside WDSP.
+- **WAV recordings** are now at full DSP level regardless of AF (previously the recorder used an inverse-gain compensation to undo the AF coupling — that compensation is no longer needed and has been removed).
+- **TX path, mode handling, panadapter, waterfall** — completely unchanged.
+
+**Re-tuning note for existing digital-mode users.** If you've been running with VAC1 RX Gain set to compensate for AF=50%, your decoder will see roughly 2× the audio level it used to. Lower VAC1 RX Gain by ~6 dB once and you're done.
+
+**Side effect — "Mute will mute VAC1" option is now inert.** That option used to silence VAC by zeroing the WDSP gain, leveraging the same coupling we've just removed. Users who want VAC silenced should toggle the VAC1 / VAC2 enable directly. May be reworked in a future release if there's demand.
+
+Thanks to **Scott VK4SHG** for the careful architectural write-up that led directly to the fix.
+
+**No DX/PRO behaviour changes outside the RX audio routing described above.** Includes the v2.1.2 PRO Power-On fix and all v2.1.1 TX cleanup.
+
+### What was new in v2.1.2
 
 **Critical PRO Power-On fix (issue #38).** SunSDR2 PRO users on v2.1.0 / v2.1.1 saw "No radio detected" when clicking Power-On — even though discovery correctly listed the radio in H/W Select. Root cause: the pre-flight reachability check (added in v2.0.16) hardcoded the DX family byte (`0x32`) in its UDP firmware-manager probe. PRO radios use family byte `0x01` and silently ignored the wrong-family probe, so the pre-flight always timed out for PRO.
 

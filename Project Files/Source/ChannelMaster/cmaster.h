@@ -113,6 +113,15 @@ extern __declspec (dllexport) void SendpInboundTCITxAudio (void (*Inbound)(int n
 extern __declspec (dllexport) void SetTCIRun (int active);
 extern __declspec (dllexport) void SetTXTCIAudio (int txid, int active);
 
+// SunSDR2 RX-AF refactor (issue #40): user's RX AF / volume slider sets the
+// per-input gain on the speaker mixer here, instead of being baked into
+// WDSP's RXA panel gain. That keeps VAC RX, TCI RX and the WAV recorder at
+// fixed DSP-output level so digital decoders (Decodium, JTDX, FLDIGI...)
+// don't need the AF slider at ~50% to receive usable audio.
+//   channel : WDSP / aamix input id (== chid(stream, subrx))
+//   gain    : 0.0..1.0 (linear; matches the old SetRXAPanelGain1 contract)
+extern __declspec (dllexport) void SetRXOutputGain (int channel, double gain);
+
 enum AudioCODEC
 {
 	HERMES = 0,														// audio codec chip in radio hardware unit
