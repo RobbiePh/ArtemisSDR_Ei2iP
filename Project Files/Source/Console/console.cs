@@ -25835,12 +25835,52 @@ namespace Thetis
             return watts;
         }
 
-        // Per-band SunSDR2 DX forward-power calibration (K, C) for
+        // Per-band SunSDR2 forward-power calibration (K, C) for
         // watts = K * (adc - C)^2. See computeAlexFwdPower for the
         // procedure to measure and add a new band. Bands without an
         // entry fall back to 20m's coefficients (default).
+        //
+        // The PRO and DX share the same model shape but use very
+        // different K coefficients — the directional coupler in the PRO
+        // has roughly 25-50× weaker coupling than the DX, so the same
+        // raw ADC value corresponds to ~25-50× less actual RF.
         private static (double K, double C) GetSunsdrPwrCal(Band b)
         {
+            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2PRO)
+            {
+                // Preliminary PRO cal — derived 2026-05-08 from Bernie F6Bernie's
+                // single-point measurements (10 W actual via Daiwa wattmeter into
+                // dummy load) on every HF band. Issue #39.
+                //
+                // Method: at real 10 W actual, Artemis on the DX cal table read
+                // X W per band. Since both share watts = K*(adc-C)^2, and the
+                // ADC is band-shared at a given drive level, K_pro = 10 * K_dx / X.
+                // C is held at the DX value (the zero-offset is a function of
+                // the ADC input, not the coupling factor).
+                //
+                // Caveat: single-point cal. Quadratic shape is locked by C, so
+                // the curve will be approximately right at low-to-mid power, but
+                // will drift at high power until we have multi-point sweeps.
+                // PRO testers: please report back at 25 / 50 / 75 / 100 W per
+                // band so we can tighten this.
+                switch (b)
+                {
+                    case Band.B160M: return (0.0000981, 33.0); // 10W → 420W on DX cal
+                    case Band.B80M:  return (0.0001111, 33.0); // 10W → 371W
+                    case Band.B60M:  return (0.0001248, 33.0); // 10W → 330W
+                    case Band.B40M:  return (0.0001372, 38.0); // 10W → 250W (uses 40m DX C)
+                    case Band.B30M:  return (0.0001144, 33.0); // 10W → 360W
+                    case Band.B20M:  return (0.0000981, 33.0); // 10W → 420W
+                    case Band.B17M:  return (0.0001062, 33.0); // 10W → 388W
+                    case Band.B15M:  return (0.0000858, 33.0); // 10W → 480W
+                    case Band.B12M:  return (0.0000821, 33.0); // 10W → 502W
+                    case Band.B10M:  return (0.0000858, 33.0); // 10W → 480W
+                    default:         return (0.0000981, 33.0); // fallback to 20m
+                }
+            }
+
+            // SunSDR2 DX (and any other future SunSDR family member that
+            // happens to share the DX coupler response).
             switch (b)
             {
                 case Band.B40M:
@@ -25880,17 +25920,24 @@ namespace Thetis
             // measurement fall back to 20m's coefficients (mid-HF, confirmed
             // accurate, best single-band default).
             //
-            // PRO note: cal table currently anchored on SunSDR2 DX measurements.
-            // PRO may share the response curve closely (same coupler family) or
-            // need its own table — TBD with PRO testers' wattmeter sweeps.
+            // PRO and DX have separate cal tables in GetSunsdrPwrCal.
+            // PRO is on a single-point-per-band cal (Bernie F6Bernie's
+            // 10 W measurements, issue #39, 2026-05-08); DX is on
+            // multi-point LP-500 sweeps for 40m + 20m, default-fallback
+            // for the rest.
             //
-            // To add a new band's calibration:
+            // To add a new band's calibration (DX path):
             //   1. TUNE on the new band, sweep drive 5-95 W in ~10 steps.
             //   2. Record (Artemis_displayed, LP-500_actual) pairs.
             //   3. For each pair: adc = sqrt(displayed/0.00412) + 33  (back-derive
             //      the raw adc using the 20m formula).
             //   4. Least-squares fit watts_LP500 = K*(adc - C)^2 over all pairs.
             //   5. Add a case to GetSunsdrPwrCal below.
+            //
+            // PRO single-point cal refinement:
+            //   1. Measure (Artemis_displayed, actual_W) at one drive level per band.
+            //   2. K_pro = actual_W * K_dx / Artemis_displayed_under_DX_cal.
+            //   3. Update PRO branch in GetSunsdrPwrCal.
             if (HardwareSpecific.IsCurrentSunSDRModel)
             {
                 adc = NetworkIO.getFwdPower();
@@ -30334,13 +30381,18 @@ namespace Thetis
 
         private void chkMON_CheckedChanged(object sender, System.EventArgs e)
         {
-            // SUNSDR: TX-monitor audio path is broken (silent on VAC, robotic
-            // on cmASIO). Long-standing, not a recent regression. Until we
-            // root-cause the routing, force MON off and hard-block the audio
-            // routing call — mode-switch handlers can still flip chkMON.Enabled
-            // back on, and if any of them set chkMON.Checked = true programmatically
-            // we don't want Audio.MON = true to fire and route broken audio.
-            if (HardwareSpecific.Model == HPSDRModel.SUNSDR2DX)
+            // SUNSDR (DX + PRO): TX-monitor audio path is broken (silent on
+            // VAC, robotic on cmASIO). Long-standing, not a recent regression.
+            // Until we root-cause the routing, force MON off and hard-block
+            // the audio routing call — mode-switch handlers can still flip
+            // chkMON.Enabled back on, and if any of them set chkMON.Checked
+            // = true programmatically we don't want Audio.MON = true to fire
+            // and route broken audio.
+            //
+            // Earlier this only checked SUNSDR2DX, so on PRO the mode-switch
+            // re-enable + click would actually arm Audio.MON (issue #39,
+            // Bernie F6Bernie 2026-05-08). Expanded to the SunSDR family.
+            if (HardwareSpecific.IsCurrentSunSDRModel)
             {
                 if (chkMON.Checked)
                 {
@@ -30351,6 +30403,9 @@ namespace Thetis
                     // re-entry is harmless (Audio.MON is already false).
                     chkMON.Checked = false;
                 }
+                // Re-assert disabled state so a mode-switch handler that
+                // re-enabled the button doesn't leave it visually clickable.
+                chkMON.Enabled = false;
                 Audio.MON = false;
                 chkMON.BackColor = SystemColors.Control;
                 return;
@@ -35602,7 +35657,10 @@ namespace Thetis
                             // chkMON.Enabled = true;
                             chkBIN.Enabled = true;
                         }
-                        chkMON.Enabled = true;
+                        // SunSDR family (DX + PRO): MON is hard-disabled
+                        // — see ApplySunSDRSpecificUI / chkMON_CheckedChanged.
+                        if (!HardwareSpecific.IsCurrentSunSDRModel)
+                            chkMON.Enabled = true;
 
                         ptbMic_Scroll(this, EventArgs.Empty);
                     }
@@ -35620,7 +35678,8 @@ namespace Thetis
                         {
                             chkBIN.Enabled = true;
                         }
-                        chkMON.Enabled = true;
+                        if (!HardwareSpecific.IsCurrentSunSDRModel)
+                            chkMON.Enabled = true;
                     }
                     break;
                 case DSPMode.SAM:
@@ -35632,7 +35691,8 @@ namespace Thetis
                         {
                             chkBIN.Enabled = true;
                         }
-                        chkMON.Enabled = true;
+                        if (!HardwareSpecific.IsCurrentSunSDRModel)
+                            chkMON.Enabled = true;
                     }
                     break;
                 case DSPMode.SPEC:
@@ -39294,7 +39354,8 @@ namespace Thetis
                             new_mode != DSPMode.SAM &&
                             new_mode != DSPMode.FM)
                         {
-                            if (chkVFOBTX.Checked)
+                            // SunSDR family (DX + PRO): MON is hard-disabled.
+                            if (chkVFOBTX.Checked && !HardwareSpecific.IsCurrentSunSDRModel)
                                 chkMON.Enabled = true;
 
                             chkRX2BIN.Enabled = true;
@@ -39318,7 +39379,7 @@ namespace Thetis
                             new_mode != DSPMode.SAM &&
                             new_mode != DSPMode.FM)
                         {
-                            if (chkVFOBTX.Checked)
+                            if (chkVFOBTX.Checked && !HardwareSpecific.IsCurrentSunSDRModel)
                                 chkMON.Enabled = true;
 
                             chkRX2BIN.Enabled = true;
@@ -39338,7 +39399,7 @@ namespace Thetis
                             new_mode != DSPMode.SAM &&
                             new_mode != DSPMode.FM)
                         {
-                            if (chkVFOBTX.Checked)
+                            if (chkVFOBTX.Checked && !HardwareSpecific.IsCurrentSunSDRModel)
                                 chkMON.Enabled = true;
 
                             chkRX2BIN.Enabled = true;

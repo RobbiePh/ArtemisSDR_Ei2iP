@@ -2,7 +2,7 @@
 
 *Open source. Native protocol. Dedicated to Artemis II.*
 
-**Current version: v2.1.3**
+**Current version: v2.1.4**
 
 ⬇️ [**Download Latest Release**](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  📘 [**Quick Start Guide**](START_HERE.md)  ·  📝 [What's new](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  💬 [Discussions](https://github.com/kk68/ArtemisSDR/discussions)  ·  🐛 [Issues](https://github.com/kk68/ArtemisSDR/issues)
 
@@ -12,7 +12,34 @@
 
 ArtemisSDR is maintained by Kosta Kanchev (K0KOZ). It is a fork of [Thetis](https://github.com/ramdor/Thetis) by Richard Samphire (MW0LGE), which itself descends from OpenHPSDR (Doug Wigley, W5WC) and PowerSDR (FlexRadio Systems). Specialized for the SunSDR2 family (DX + PRO) and released under GPL v2.
 
-### What's new in v2.1.3
+### What's new in v2.1.4
+
+**SunSDR2 PRO TX power calibration — first proper per-band table (issue #39).** PRO testers reported the Artemis TX meter reading absurd numbers (e.g. 327 W on 7 MHz when the radio was actually putting out 10 W). Root cause: the per-band cal table was anchored on **SunSDR2 DX measurements only**, and the PRO's directional coupler has a coupling factor roughly 25-50× weaker than the DX, so the same raw ADC reading translated into ~25-50× more displayed power. Bernie F6Bernie did the legwork and sent measurements at 10 W actual on every HF band, top to bottom — that data is now baked in as a PRO-specific table.
+
+| Band | Real | DX cal showed | PRO cal will show |
+|------|------|---------------|-------------------|
+| 160m | 10 W | 420 W | ~10 W |
+| 80m | 10 W | 371 W | ~10 W |
+| 60m | 10 W | 330 W | ~10 W |
+| 40m | 10 W | 250 W | ~10 W |
+| 30m | 10 W | 360 W | ~10 W |
+| 20m | 10 W | 420 W | ~10 W |
+| 17m | 10 W | 388 W | ~10 W |
+| 15m | 10 W | 480 W | ~10 W |
+| 12m | 10 W | 502 W | ~10 W |
+| 10m | 10 W | 480 W | ~10 W |
+
+**This is a single-point cal per band.** The shape of the quadratic (zero-offset C) is held at the DX value, and only the slope coefficient K is corrected. That gives accurate readings near 10 W and approximately right readings across the lower-power range, but the curve will probably drift at higher powers (50-100 W) until we have multi-point sweeps. **PRO testers — please post (Artemis displayed, actual measured) pairs at 25 / 50 / 75 / 100 W per band on issue #39 so we can tighten this.**
+
+**No DX behaviour changes.** The DX cal table is byte-for-byte unchanged. PRO uses its own branch in `GetSunsdrPwrCal`; DX uses the existing branch (40m + 20m measured by LP-500, default-fallback for others).
+
+**MON button gate now covers PRO too (issue #39).** On the SunSDR family the TX-monitor audio path has two long-standing bugs (silent through VAC, robotic through cmASIO), so MON is intentionally hard-disabled while we root-cause the routing. The gate in `chkMON_CheckedChanged` was checking only `SUNSDR2DX` — same DX-vs-PRO equality bug pattern as v2.1.2's firmware probe — so on PRO the button could be re-enabled by mode-switch handlers and clicked, arming `Audio.MON` and routing broken audio. Expanded to the SunSDR family. The 6 mode-switch sites that re-enabled MON are now also SunSDR-aware so the button doesn't visually toggle clickable / non-clickable as the user changes modes.
+
+**Thanks** to Bernie F6Bernie for the careful measurements, screenshots, and patient testing on issue #39.
+
+**No DX/PRO behaviour changes outside the items above.** RX path, TX path, panadapter, waterfall, mode handling, cmASIO, VAC routing, hardware PTT — all unchanged from v2.1.3 (which itself includes the v2.1.2 PRO Power-On fix and the v2.1.1 TX cleanup).
+
+### What was new in v2.1.3
 
 **VAC / TCI RX audio decoupled from RX AF slider (issue #40).** Reported by **Scott VK4SHG** and reproduced locally with JTDX: digital-mode decoders (Decodium, JTDX, FLDIGI, WSJT-X via VAC1, TCI clients) only worked when the RX1 AF slider was somewhere near 50%. Drop AF to listen quietly — decoders stopped decoding. Push AF up to listen loudly — decoders saw clipped audio.
 
