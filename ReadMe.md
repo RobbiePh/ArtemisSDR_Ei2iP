@@ -2,7 +2,7 @@
 
 *Open source. Native protocol. Dedicated to Artemis II.*
 
-**Current version: v2.1.5**
+**Current version: v2.1.6**
 
 ⬇️ [**Download Latest Release**](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  📘 [**Quick Start Guide**](START_HERE.md)  ·  📝 [What's new](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  💬 [Discussions](https://github.com/kk68/ArtemisSDR/discussions)  ·  🐛 [Issues](https://github.com/kk68/ArtemisSDR/issues)
 
@@ -12,7 +12,33 @@
 
 ArtemisSDR is maintained by Kosta Kanchev (K0KOZ). It is a fork of [Thetis](https://github.com/ramdor/Thetis) by Richard Samphire (MW0LGE), which itself descends from OpenHPSDR (Doug Wigley, W5WC) and PowerSDR (FlexRadio Systems). Specialized for the SunSDR2 family (DX + PRO) and released under GPL v2.
 
-### What's new in v2.1.5
+### What's new in v2.1.6
+
+**SunSDR2 PRO TX power calibration — refined two-point fit + 6 m entry (issue #39).** v2.1.4 shipped a single-point-per-band PRO calibration table from Bernie F6Bernie's 10 W measurements. Bernie then ran a follow-up at 5 W and 15 W per band — a true two-point sweep — plus 6 m which the v2.1.4 table didn't have at all and was falling through to the 20 m default. v2.1.6 fits both K and C per band from the two data points so the curve passes through Bernie's measurements at 5 W and 15 W exactly:
+
+| Band | Real 5 W → v2.1.5 | Real 15 W → v2.1.5 | v2.1.6 expectation |
+|------|-------------------|---------------------|--------------------|
+| 160m | 7 W | 15 W | exact at 5 W and 15 W |
+| 80m | 7 W | 13 W | exact |
+| 60m | 7 W | 14 W | exact |
+| 40m | 8 W | 15 W | exact |
+| 30m | 7 W | 13 W | exact |
+| 20m | 7 W | 14 W | exact |
+| 17m | 7 W | 13 W | exact |
+| 15m | 7 W | 12 W (real 13 W) | exact |
+| 12m | 7 W | 14 W | exact |
+| 10m | 6 W | 13 W | exact |
+| **6m (new)** | **12 W (real 5 W)** | **23 W (real 11 W)** | **exact** — was 2× over before |
+
+**Caveat — still a two-point fit.** The cal lands within ~0.5 W on Bernie's test points but may deviate at higher powers (50 W+) where most HF QRO operation actually happens. **PRO testers — please post (Artemis displayed, real measured) pairs at 25 / 50 / 75 / 100 W per band on issue #39 so the curve can be tightened across the full operating range.**
+
+**No DX behaviour changes.** The DX cal table is byte-for-byte unchanged. PRO uses its own branch in `GetSunsdrPwrCal`.
+
+**Thanks** to Bernie F6Bernie for running the second batch of measurements before going QRT for the day.
+
+**No DX/PRO behaviour changes outside the PRO power table.** Includes the v2.1.5 VAC AF restoration, the v2.1.4 MON gate fix, the v2.1.3 TCI decoupling, the v2.1.2 PRO Power-On fix, and all v2.1.1 TX cleanup.
+
+### What was new in v2.1.5
 
 **RX AF slider now drives VAC1 / VAC2 volume again (issues #40 / #41).** v2.1.3 decoupled VAC and TCI audio from the AF slider to fix Scott VK4SHG's complaint on issue #40 — digital decoders were unusable unless AF sat near 50%. Architecturally that was the right move for TCI, but it broke the most common workflow on the RX side: VAC users (the long-running default since OpenHPSDR / Thetis) lost their primary volume control. RobbiePh / EI2IP on issue #40 and ea5ccy on issue #41 reported the regression within hours of v2.1.3 going out.
 

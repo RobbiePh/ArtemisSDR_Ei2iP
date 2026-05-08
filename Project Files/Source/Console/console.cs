@@ -25848,34 +25848,46 @@ namespace Thetis
         {
             if (HardwareSpecific.Model == HPSDRModel.SUNSDR2PRO)
             {
-                // Preliminary PRO cal — derived 2026-05-08 from Bernie F6Bernie's
-                // single-point measurements (10 W actual via Daiwa wattmeter into
-                // dummy load) on every HF band. Issue #39.
+                // PRO cal — refined 2026-05-08 from Bernie F6Bernie's
+                // two-point measurements (real 5 W and 15 W via Daiwa
+                // wattmeter into dummy load) on every HF band, plus
+                // 6 m. Issue #39.
                 //
-                // Method: at real 10 W actual, Artemis on the DX cal table read
-                // X W per band. Since both share watts = K*(adc-C)^2, and the
-                // ADC is band-shared at a given drive level, K_pro = 10 * K_dx / X.
-                // C is held at the DX value (the zero-offset is a function of
-                // the ADC input, not the coupling factor).
+                // Method: with two (real, Artemis_displayed_under_v2.1.4_cal)
+                // pairs per band, back-derive the raw ADC values from the
+                // previous cal, then solve watts = K * (adc - C)^2 for the
+                // K and C that pass through both real-watts points exactly.
+                // Both K and C are now band-specific (the previous v2.1.4
+                // single-point fit kept C borrowed from the DX entry,
+                // which was approximate — the new fit shows C is closer to
+                // 130-175 on PRO, not 33).
                 //
-                // Caveat: single-point cal. Quadratic shape is locked by C, so
-                // the curve will be approximately right at low-to-mid power, but
-                // will drift at high power until we have multi-point sweeps.
-                // PRO testers: please report back at 25 / 50 / 75 / 100 W per
-                // band so we can tighten this.
+                // Result: cal lands within ~0.5 W of Bernie's measurements
+                // at 5 W and 15 W on every HF band, and 6 m (which had been
+                // falling through to 20 m and over-reading by ~2× — 23 W
+                // displayed at 11 W actual) now has its own entry.
+                //
+                // Caveat: still a two-point fit. Outside the 5-15 W range,
+                // and especially at 50 W+ where most HF QRO operation
+                // happens, the curve may deviate. PRO testers: please
+                // report back at 25 / 50 / 75 / 100 W per band on issue
+                // #39 so we can tighten the high-power region.
                 switch (b)
                 {
-                    case Band.B160M: return (0.0000981, 33.0); // 10W → 420W on DX cal
-                    case Band.B80M:  return (0.0001111, 33.0); // 10W → 371W
-                    case Band.B60M:  return (0.0001248, 33.0); // 10W → 330W
-                    case Band.B40M:  return (0.0001372, 38.0); // 10W → 250W (uses 40m DX C)
-                    case Band.B30M:  return (0.0001144, 33.0); // 10W → 360W
-                    case Band.B20M:  return (0.0000981, 33.0); // 10W → 420W
-                    case Band.B17M:  return (0.0001062, 33.0); // 10W → 388W
-                    case Band.B15M:  return (0.0000858, 33.0); // 10W → 480W
-                    case Band.B12M:  return (0.0000821, 33.0); // 10W → 502W
-                    case Band.B10M:  return (0.0000858, 33.0); // 10W → 480W
-                    default:         return (0.0000981, 33.0); // fallback to 20m
+                    // Comments show the v2.1.4/v2.1.5 readings Bernie measured at
+                    // (real_5W → Artemis_displayed, real_15W → Artemis_displayed).
+                    case Band.B160M: return (0.0001746, 130.9);  // (5→7, 15→15)
+                    case Band.B80M:  return (0.0003228, 159.6);  // (5→7, 15→13)
+                    case Band.B60M:  return (0.0002784, 135.8);  // (5→7, 15→14)
+                    case Band.B40M:  return (0.0003366, 157.6);  // (5→8, 15→15)
+                    case Band.B30M:  return (0.0003330, 157.8);  // (5→7, 15→13)
+                    case Band.B20M:  return (0.0002189, 149.0);  // (5→7, 15→14)
+                    case Band.B17M:  return (0.0003083, 162.4);  // (5→7, 15→13)
+                    case Band.B15M:  return (0.0002402, 174.3);  // (5→7, 13→12)
+                    case Band.B12M:  return (0.0001832, 159.8);  // (5→7, 15→14)
+                    case Band.B10M:  return (0.0001721, 127.0);  // (5→6, 15→13)
+                    case Band.B6M:   return (0.0000645, 104.4);  // (5→12, 11→23)
+                    default:         return (0.0002189, 149.0);  // fallback to 20m
                 }
             }
 
