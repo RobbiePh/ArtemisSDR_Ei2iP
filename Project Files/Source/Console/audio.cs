@@ -1639,6 +1639,14 @@ namespace Thetis
                     ivac.SetIVACinitialVars(0, vac1_oldVarIn, vac1_oldVarOut);
                     //
 
+                    // Sync the VAC1 mixer's RX input gain to the current RX1
+                    // AF slider position (issue #40 follow-up). Without this,
+                    // VAC1 starts at full mixer gain regardless of where the
+                    // AF slider sits, and the user has to nudge the slider
+                    // before the volume catches up.
+                    if (console != null && console.radio != null)
+                        ivac.SetIVACafgain(0, console.radio.GetDSPRX(0, 0).RXOutputGain);
+
                     try
                     {
                         retval = ivac.StartAudioIVAC(0) == 1;
@@ -1718,6 +1726,12 @@ namespace Thetis
                     ivac.SetIVACswapIQout(1, _swap_iq_vac2);
                     ivac.SetIVACinitialVars(1, vac2_oldVarIn, vac2_oldVarOut);
                     //
+
+                    // Sync the VAC2 mixer's RX input gain to the current RX2
+                    // AF slider position (issue #40 follow-up). See EnableVAC1
+                    // for the rationale.
+                    if (console != null && console.radio != null)
+                        ivac.SetIVACafgain(1, console.radio.GetDSPRX(1, 0).RXOutputGain);
 
                     try
                     {

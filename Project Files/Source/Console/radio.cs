@@ -1084,25 +1084,28 @@ namespace Thetis
 				{
                     if (value != rx_output_gain_dsp || force)
 					{
-                        // SunSDR2 issue #40: AF / volume slider now controls
-                        // the speaker mixer input rather than the WDSP RXA
-                        // panel gain. That keeps VAC, TCI and the WAV recorder
-                        // at a fixed DSP level so digital decoders no longer
-                        // need ~50% AF to receive usable audio.
+                        // SunSDR2 issue #40 (and follow-up #41 + RobbiePh on
+                        // #40): AF / volume slider drives both the speaker
+                        // mixer and each VAC's RX input gain, while WDSP's
+                        // RX panel gain stays pinned at 1.0. That keeps the
+                        // pre-v2.1.3 muscle-memory ("AF slider = volume")
+                        // for both speaker and VAC listeners, while leaving
+                        // TCI at fixed DSP level (TCI taps the audio earlier
+                        // in pipe.c, so it doesn't pick up the per-VAC
+                        // mixer scaling — decoders on TCI keep working at
+                        // any AF setting, the issue #40 fix is preserved).
                         //
-                        // WDSP panel gain stays pinned at 1.0 unconditionally.
-                        // Earlier draft tried to forward value==0 through to
-                        // WDSP to keep the legacy "Mute will mute VAC1" option
-                        // working, but that path also fires when the user
-                        // simply drags AF to 0 — silencing JTDX / Decodium /
-                        // any digital app, which is exactly the bug we're
-                        // fixing. The legacy mute-VAC option was itself a
-                        // workaround for this coupling and is now inert; users
-                        // wanting VAC silenced should toggle VAC1 enable
-                        // directly.
+                        // VAC mapping: chid 0 = RX1 main → VAC1 (id 0);
+                        // chid 2 = RX2 main → VAC2 (id 1). SubRx (chid 1
+                        // and 3) drives the speaker mixer for sub-RX
+                        // balance only — the VAC mixer input gain follows
+                        // the main RX slider, which is the typical
+                        // single-subRx VAC workflow.
                         int channel_id = WDSP.id(thread, subrx);
                         cmaster.SetRXOutputGain(channel_id, value);
                         WDSP.SetRXAPanelGain1(channel_id, 1.0);
+                        if (channel_id == 0) ivac.SetIVACafgain(0, value);
+                        else if (channel_id == 2) ivac.SetIVACafgain(1, value);
 						rx_output_gain_dsp = value;
 
                         // Wave recorder pulls from pipe.c's rbuff which is

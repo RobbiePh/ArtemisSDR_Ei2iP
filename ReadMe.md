@@ -2,7 +2,7 @@
 
 *Open source. Native protocol. Dedicated to Artemis II.*
 
-**Current version: v2.1.4**
+**Current version: v2.1.5**
 
 ⬇️ [**Download Latest Release**](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  📘 [**Quick Start Guide**](START_HERE.md)  ·  📝 [What's new](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  💬 [Discussions](https://github.com/kk68/ArtemisSDR/discussions)  ·  🐛 [Issues](https://github.com/kk68/ArtemisSDR/issues)
 
@@ -12,7 +12,30 @@
 
 ArtemisSDR is maintained by Kosta Kanchev (K0KOZ). It is a fork of [Thetis](https://github.com/ramdor/Thetis) by Richard Samphire (MW0LGE), which itself descends from OpenHPSDR (Doug Wigley, W5WC) and PowerSDR (FlexRadio Systems). Specialized for the SunSDR2 family (DX + PRO) and released under GPL v2.
 
-### What's new in v2.1.4
+### What's new in v2.1.5
+
+**RX AF slider now drives VAC1 / VAC2 volume again (issues #40 / #41).** v2.1.3 decoupled VAC and TCI audio from the AF slider to fix Scott VK4SHG's complaint on issue #40 — digital decoders were unusable unless AF sat near 50%. Architecturally that was the right move for TCI, but it broke the most common workflow on the RX side: VAC users (the long-running default since OpenHPSDR / Thetis) lost their primary volume control. RobbiePh / EI2IP on issue #40 and ea5ccy on issue #41 reported the regression within hours of v2.1.3 going out.
+
+**v2.1.5 puts VAC volume back on the AF slider while keeping TCI at fixed DSP level.** The fix lives at the per-VAC-mixer level: the AF / volume slider now scales the VAC's RX input gain (`SetIVACafgain` on the VAC mixer's input 0) in addition to the speaker mixer it already drove in v2.1.3. WDSP's RX panel gain stays pinned at 1.0, so TCI — which taps the audio earlier in the pipeline (before the per-VAC mixer) — is unaffected. Decoders on TCI keep working at any AF setting.
+
+**Composes cleanly with Setup → VAC RX Gain.** The two scales multiply at the mixer (`tvol = vac_rx_scale × af_gain`). Use AF for normal volume swings, VAC RX Gain for set-once trim. Same as it felt before v2.1.3.
+
+| Path | v2.1.4 (broken) | v2.1.5 |
+|---|---|---|
+| Speaker | AF-scaled ✓ | AF-scaled ✓ |
+| **VAC1 / VAC2 RX** | full level (broke) | **AF-scaled** ✓ |
+| TCI RX | full level ✓ | full level ✓ |
+| WAV recorder | full level | full level |
+
+**Initialization gotcha handled.** When VAC is enabled (or re-enabled), Artemis now syncs the VAC mixer's RX gain to the current AF slider position immediately, so the volume is correct on first connect — not just after the user nudges the slider once.
+
+**Minor known limitation.** Multi-subRx-into-VAC users: only the main RX AF slider drives the VAC mixer. The SubRx slider scales the speaker correctly but doesn't independently scale the SubRx contribution to VAC. Rare workflow; documented inline in `radio.cs`.
+
+**Thanks** to RobbiePh / EI2IP and ea5ccy for the fast regression reports, and to Scott VK4SHG for the original architectural feedback that's still preserved for TCI.
+
+**No DX/PRO behaviour changes outside the AF/VAC routing described above.** Includes the v2.1.4 PRO power-calibration table, the v2.1.4 MON gate fix, the v2.1.3 TCI decoupling, the v2.1.2 PRO Power-On fix, and all v2.1.1 TX cleanup.
+
+### What was new in v2.1.4
 
 **SunSDR2 PRO TX power calibration — first proper per-band table (issue #39).** PRO testers reported the Artemis TX meter reading absurd numbers (e.g. 327 W on 7 MHz when the radio was actually putting out 10 W). Root cause: the per-band cal table was anchored on **SunSDR2 DX measurements only**, and the PRO's directional coupler has a coupling factor roughly 25-50× weaker than the DX, so the same raw ADC reading translated into ~25-50× more displayed power. Bernie F6Bernie did the legwork and sent measurements at 10 W actual on every HF band, top to bottom — that data is now baked in as a PRO-specific table.
 

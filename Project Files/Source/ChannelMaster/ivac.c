@@ -713,6 +713,23 @@ PORT void SetIVACrxscale(int id, double scale)
 	SetAAudioMixVolume(a->mixer, 0, a->vac_rx_scale);
 }
 
+// Per-input AF gain on the RX audio leg of the VAC mixer (input 0).
+// Composes with vac_rx_scale (set via SetIVACrxscale from the Setup →
+// VAC RX Gain slider): effective gain = vac_rx_scale * af_gain.
+//
+// Wired up so the per-RX AF / volume slider on the main panel scales
+// the VAC RX feed the same way it did before v2.1.3, while leaving
+// TCI RX (which taps the audio earlier in pipe.c) at fixed DSP level
+// per issue #40. v2.1.3 broke VAC volume control by removing the AF
+// coupling everywhere; this restores it for VAC without re-coupling
+// TCI.
+PORT void SetIVACafgain(int id, double gain)
+{
+	IVAC a = pvac[id];
+	if (a == 0 || a->mixer == 0) return;
+	SetAAudioMixVol(a->mixer, 0, 0, gain);
+}
+
 PORT void SetIVACbypass(int id, int bypass)
 {
 	IVAC a = pvac[id];
