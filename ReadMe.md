@@ -2,7 +2,7 @@
 
 *Open source. Native protocol. Dedicated to Artemis II.*
 
-**Current version: v2.1.6**
+**Current version: v2.1.7**
 
 ⬇️ [**Download Latest Release**](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  📘 [**Quick Start Guide**](START_HERE.md)  ·  📝 [What's new](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  💬 [Discussions](https://github.com/kk68/ArtemisSDR/discussions)  ·  🐛 [Issues](https://github.com/kk68/ArtemisSDR/issues)
 
@@ -12,7 +12,21 @@
 
 ArtemisSDR is maintained by Kosta Kanchev (K0KOZ). It is a fork of [Thetis](https://github.com/ramdor/Thetis) by Richard Samphire (MW0LGE), which itself descends from OpenHPSDR (Doug Wigley, W5WC) and PowerSDR (FlexRadio Systems). Specialized for the SunSDR2 family (DX + PRO) and released under GPL v2.
 
-### What's new in v2.1.6
+### What's new in v2.1.7
+
+Three independent fixes bundled. Two of them (PRO native rate, meter skin path) touch PRO-side behaviour we couldn't fully validate locally because there's no SunSDR2 PRO on the development bench. **PRO users — please install, test, and report back on issue #46 (sample rate) and issue #45 (meters) if anything misbehaves.** Reverts are a single commit each; nothing in this release is irreversible.
+
+**SunSDR2 PRO RX lifted to native 312.5 kHz (issue #46).** Previously the PRO was hard-locked at the lowest of the four IQ rates the radio supports (39,062.5 Hz), with a 39062.5 → 384 kHz upsample stage feeding WDSP. The panadapter span was capped at ~20 kHz when the hardware can do ~150 kHz. Per Expert Electronics' product page and Adam Farson's review, PRO supports the same four IQ rates as the DX (39062.5 / 78125 / 156250 / 312500), and Jim W4JEA's EESDR3 screenshot on issue #46 confirmed the radio runs at 312500 Hz on the same hardware. The fix lifts PRO to 312500 Hz native (matching DX): swaps the 8 × `0x14` per-channel rate codes in the PRO state-sync wire template for `0x32` (the rate code DX uses today), changes the PRO profile's `rxNativeRate` to 312500.0, and the upsample stage is bypassed automatically via the existing native-router gate. The old 39062.5 → 384 kHz path is left in the source as a dormant fallback in case it's needed for a future model. **No DX behaviour changes** — DX path is byte-for-byte unchanged.
+
+**Honest caveat on the PRO change:** we don't have a PRO on the bench, so this fix is best-effort based on (a) the protocol family being identical between DX and PRO, (b) the wire-template structure being symmetric across the two state-sync packets, and (c) the four-rate spec being documented by Expert. If your PRO comes up silent or distorted after upgrading to v2.1.7, please open an issue immediately and we'll revert. Revert is one commit.
+
+**Meter skin/asset path was still pointing at upstream OpenHPSDR (issue #45).** MeterManager.cs:391 hardcoded `%APPDATA%\OpenHPSDR\` as the root for skin + meter asset lookup — a leftover from the upstream Thetis path that never got renamed when Artemis split off. Every other path bootstrap in the app uses `%APPDATA%\ArtemisSDR\` correctly, but MeterManager was missed. As a result, even though `default-skin.zip` correctly extracts OE3IDE-TheBlue (with all the standard meter assets — `cross-needle.png`, `eye-bezel.png`, `ananMM-bg*.png`, the rotator backgrounds) into `%APPDATA%\ArtemisSDR\Skins\` on first launch, the meter renderer was hunting in a non-existent OpenHPSDR folder. Anything more elaborate than a bar meter — cross-needle, eye-bezel, rotators — rendered as bare scale text + tick lines with no dial-face background. Bernie F6Bernie's #45 symptom (meter container broken on first install, fixed only after installing Thetis once) matched exactly: Thetis's `MeterSkinInstaller` populates `%APPDATA%\OpenHPSDR\`, which then accidentally satisfied Artemis's wrong lookup path. **Fresh Artemis installs after v2.1.7 get working cross-meter / eye-bezel / rotator meters out of the box** — no Thetis side-trip required.
+
+**cmASIO Setup tab — device + I/O pair dropdowns now unlocked while running; Disable button gives visible feedback.** The cmASIO tab follows a "queue change, apply on restart" model (see the "Settings updated. Restart to take effect." label). Earlier code disabled the device dropdown and the in/out pair selectors whenever cmASIO was already active, preventing users from queuing a different device or channel set for the next session. There was no architectural reason for that lock — pickering a different device just updates the registry for the next launch; it doesn't disturb the running cmASIO. Additionally, the Disable button previously wrote `""` to the ASIO driver name with zero on-screen feedback (users clicked Disable and the form looked unchanged), making it feel like the button was inert. Both fixed: dropdowns are always enabled, Disable clears the current-device label and greys out the per-device controls so the queued-disable state is visible immediately.
+
+**No DX behaviour changes outside the cmASIO UX improvement above** (which affects all SunSDR users on cmASIO).
+
+### What was new in v2.1.6
 
 **SunSDR2 PRO TX power calibration — refined two-point fit + 6 m entry (issue #39).** v2.1.4 shipped a single-point-per-band PRO calibration table from Bernie F6Bernie's 10 W measurements. Bernie then ran a follow-up at 5 W and 15 W per band — a true two-point sweep — plus 6 m which the v2.1.4 table didn't have at all and was falling through to the 20 m default. v2.1.6 fits both K and C per band from the two data points so the curve passes through Bernie's measurements at 5 W and 15 W exactly:
 
