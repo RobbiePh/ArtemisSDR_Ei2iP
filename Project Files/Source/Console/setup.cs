@@ -32857,8 +32857,13 @@ namespace Thetis
 
             _ignore_cmasio_settings_change = true; // prevent any changes here from writing to registry
 
-            bool enable = cmaster.GetCMAstate() == 0; // only enable when CMA is stopped
-            comboASIODevicesAvailable.Enabled = enable;
+            // The entire cmASIO tab follows a "queue change, apply on restart"
+            // model — see the "Settings updated. Restart to take effect." label.
+            // Earlier code disabled this dropdown when cmASIO was already
+            // running (state == 1), which prevented users from queuing a
+            // different device for the next session. There's no actual harm
+            // in letting them pick — the change doesn't apply until restart.
+            comboASIODevicesAvailable.Enabled = true;
 
             comboASIODevicesAvailable.Items.Clear();
             comboCMASIO_inpair.Items.Clear();
@@ -32989,39 +32994,38 @@ namespace Thetis
         }
         private void setupInOutBaseChannels(bool select_zero = false)
         {
-            bool enable = cmaster.GetCMAstate() == 0;
-
+            // Always populate from the currently selected device. Earlier code
+            // had a `cmaster.GetCMAstate() == 0` gate here that collapsed the
+            // pair selectors to a single read-only entry whenever cmASIO was
+            // active — but, like the device dropdown above, these selectors
+            // are queue-and-restart, so blocking them while running was just
+            // preventing users from configuring the next session.
             comboCMASIO_inpair.Items.Clear();
             comboCMASIO_outpair.Items.Clear();
 
             int in_ch = CMASIOConfig.GetASIObaseinchannel();
             int out_ch = CMASIOConfig.GetASIObaseoutchannel();
-            if (enable)
+
+            AsioDeviceInfo device = comboASIODevicesAvailable.SelectedItem as AsioDeviceInfo;
+            if (device != null)
             {
-                AsioDeviceInfo device = comboASIODevicesAvailable.SelectedItem as AsioDeviceInfo;
-                if (device != null)
+                for (int i = 0; i < device.InputChannelCount - 1; i++)
                 {
-                    for (int i = 0; i < device.InputChannelCount - 1; i++)
-                    {
-                        int idx = comboCMASIO_inpair.Items.Add($"ch{(i + 1).ToString()} + {(i + 2).ToString()}");
-                        if (idx == in_ch) comboCMASIO_inpair.SelectedIndex = idx;
-                    }
-                    for (int i = 0; i < device.OutputChannelCount - 1; i++)
-                    {
-                        int idx = comboCMASIO_outpair.Items.Add($"ch{(i + 1).ToString()} + {(i + 2).ToString()}");
-                        if (idx == out_ch) comboCMASIO_outpair.SelectedIndex = idx;
-                    }
-                    comboCMASIO_inpair.Enabled = true;
-                    comboCMASIO_outpair.Enabled = true;
+                    int idx = comboCMASIO_inpair.Items.Add($"ch{(i + 1).ToString()} + {(i + 2).ToString()}");
+                    if (idx == in_ch) comboCMASIO_inpair.SelectedIndex = idx;
                 }
-                else
+                for (int i = 0; i < device.OutputChannelCount - 1; i++)
                 {
-                    comboCMASIO_inpair.Enabled = false;
-                    comboCMASIO_outpair.Enabled = false;
+                    int idx = comboCMASIO_outpair.Items.Add($"ch{(i + 1).ToString()} + {(i + 2).ToString()}");
+                    if (idx == out_ch) comboCMASIO_outpair.SelectedIndex = idx;
                 }
+                comboCMASIO_inpair.Enabled = true;
+                comboCMASIO_outpair.Enabled = true;
             }
             else
             {
+                // No usable device info — show the saved channel as a single
+                // read-only entry so the user still sees what's queued.
                 int idx;
                 idx = comboCMASIO_inpair.Items.Add($"ch{(in_ch + 1).ToString()} + {(in_ch + 2).ToString()}");
                 comboCMASIO_inpair.SelectedIndex = idx;
@@ -33054,7 +33058,19 @@ namespace Thetis
 
         private void btnCMASIODisable_Click(object sender, EventArgs e)
         {
+            // Queue cmASIO off for the next restart. The cmASIO subsystem
+            // can't be torn down hot — it has to be re-evaluated at app
+            // startup — so we just clear the registry entry and rely on
+            // the "Settings updated. Restart to take effect." label.
+            //
+            // Update the on-screen state too: clear the "Current cmASIO
+            // Device" label and disable the per-device controls so the
+            // user can see something happened. Without this the dropdown
+            // still shows the device that was current at tab-open and the
+            // button looks like a no-op.
             CMASIOConfig.SetASIOdrivername("");
+            txtCurrentAsioDevice.Text = "";
+            setCMasioControls(false);
             updateCMAsioInfo();
         }
         private void setCMasioControls(bool enabled)
