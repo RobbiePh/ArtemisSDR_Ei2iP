@@ -388,7 +388,31 @@ namespace Thetis
             _snap_freqs_cw = new float[0];
             _snap_freqs_other = new float[0];
 
-            _openHPSDR_appdatapath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\OpenHPSDR";
+            // Issue #45 fix. Earlier this hardcoded "\\OpenHPSDR" — a
+            // leftover from the upstream Thetis path that never got renamed
+            // when Artemis split off. Every other path bootstrap in the app
+            // correctly uses "\\ArtemisSDR" (see console.cs:684 and the
+            // Skin / DBMan / MemoryList / DXMemList wiring), but MeterManager
+            // was missed. The result: the extracted bundled-skin assets at
+            // %APPDATA%\ArtemisSDR\Skins\OE3IDE-TheBlue\Meters\ were never
+            // found by the meter renderer, which was hunting in the
+            // non-existent %APPDATA%\OpenHPSDR\Skins\ path. The cross-meter
+            // and other elaborate meter types rendered as bare lines + scale
+            // text because their background PNGs (cross-needle.png,
+            // eye-bezel.png, ananMM-bg*.png) failed to load.
+            //
+            // Bernie F6Bernie's symptom on issue #45 — "meter container
+            // broken on first Artemis install, fixed after running Thetis
+            // once" — was exactly this: Thetis populated %APPDATA%\OpenHPSDR\
+            // with its MeterSkinInstaller assets, which then happened to
+            // satisfy Artemis's wrong lookup path. The proper fix is to
+            // point MeterManager at Artemis's actual appdata folder.
+            //
+            // Variable name kept as `_openHPSDR_appdatapath` to minimise
+            // the diff — it's used in many places and renaming it across
+            // the file is a separate cleanup. The string it holds is what
+            // matters.
+            _openHPSDR_appdatapath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + "\\ArtemisSDR";
 
             //for rx1+rx2
             _led_readings = new ConcurrentDictionary<string, object>[2];
