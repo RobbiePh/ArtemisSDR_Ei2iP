@@ -2447,18 +2447,37 @@ namespace Thetis
             string sDefaultPath = _openHPSDR_appdatapath;
             string sSkinPath = _current_skin_path;
 
+            // Legacy upstream Thetis Meters root. The v2.1.7 path-rename fix
+            // pointed `_openHPSDR_appdatapath` at "\\ArtemisSDR" (the correct
+            // Artemis appdata root). Existing users with Thetis history have
+            // their shared meter-background PNGs (ananMM-bg, cross-needle-bg,
+            // rotator_*-bg) installed under "\\OpenHPSDR\\Meters\\" by
+            // Thetis's MeterSkinInstaller — those PNGs are NOT in the bundled
+            // default-skin.zip and are NOT under any per-skin Meters folder.
+            //
+            // Keep the legacy path as a SECONDARY fallback so backgrounds
+            // keep rendering for legacy users until they migrate the assets
+            // into "\\ArtemisSDR\\Meters\\". Fresh Artemis users (no
+            // OpenHPSDR folder) just hit the per-skin and primary paths
+            // and the legacy check returns no hit.
+            string sLegacyDefaultPath = Environment.GetFolderPath(
+                Environment.SpecialFolder.ApplicationData) + "\\OpenHPSDR";
+
             string[] imageFileNames = { "ananMM", "ananMM-bg", "ananMM-bg-tx", "cross-needle", "cross-needle-bg", "eye-bezel", "rotator_az-bg", "rotator_ele-bg", "rotator_both-bg", "rotator_map-bg" };
             string[] imageFileNameParts = { "", "-small", "-large", "-dark", "-dark-small", "-dark-large" };
             string[] image_extensions = { ".png", ".jpg", ".jpeg", ".bmp" };
 
             // load
             if (!sDefaultPath.EndsWith("\\")) sDefaultPath += "\\";
+            if (!sLegacyDefaultPath.EndsWith("\\")) sLegacyDefaultPath += "\\";
+            bool legacyExists = Directory.Exists(sLegacyDefaultPath);
             if (Directory.Exists(sDefaultPath))
             {
                 for (int n = 0; n < imageFileNames.Length; n++)
                 {
                     string sSkinFileName = sSkinPath + "\\Meters\\" + imageFileNames[n];
                     string sDefaultFileName = sDefaultPath + "\\Meters\\" + imageFileNames[n];
+                    string sLegacyFileName = sLegacyDefaultPath + "\\Meters\\" + imageFileNames[n];
 
                     for (int i = 0; i < imageFileNameParts.Length; i++)
                     {
@@ -2485,6 +2504,14 @@ namespace Thetis
                             else if (File.Exists(sDefaultFileName + image_filname))
                             {
                                 loadImage(sDefaultFileName + image_filname, false);
+                                break;
+                            }
+                            else if (legacyExists && File.Exists(sLegacyFileName + image_filname))
+                            {
+                                // Backgrounds (ananMM-bg, cross-needle-bg,
+                                // rotator_*-bg) commonly live here for users
+                                // with prior Thetis MeterSkinInstaller runs.
+                                loadImage(sLegacyFileName + image_filname, false);
                                 break;
                             }
                         }
