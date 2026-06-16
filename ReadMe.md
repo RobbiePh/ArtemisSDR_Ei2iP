@@ -2,7 +2,7 @@
 
 *Open source. Native protocol. Dedicated to Artemis II.*
 
-**Current version: v2.1.7**
+**Current version: v2.1.8**
 
 ⬇️ [**Download Latest Release**](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  📘 [**Quick Start Guide**](START_HERE.md)  ·  📝 [What's new](https://github.com/kk68/ArtemisSDR/releases/latest)  ·  💬 [Discussions](https://github.com/kk68/ArtemisSDR/discussions)  ·  🐛 [Issues](https://github.com/kk68/ArtemisSDR/issues)
 
@@ -12,7 +12,17 @@
 
 ArtemisSDR is maintained by Kosta Kanchev (K0KOZ). It is a fork of [Thetis](https://github.com/ramdor/Thetis) by Richard Samphire (MW0LGE), which itself descends from OpenHPSDR (Doug Wigley, W5WC) and PowerSDR (FlexRadio Systems). Specialized for the SunSDR2 family (DX + PRO) and released under GPL v2.
 
-### What's new in v2.1.7
+### What's new in v2.1.8
+
+**Hotfix release: reverts the v2.1.7 PRO native-rate change (issue #47).** The v2.1.7 attempt to lift SunSDR2 PRO RX from 39,062.5 Hz to 312,500 Hz by reusing the DX state-sync rate code (`0x32`) broke RX audio on multiple PRO testers — Bernie F6Bernie, Jim W4JEA, Pedro EA5CCY, and SQ5OMO all reported no audio, slow/garbled panadapter, or program crashes after upgrading. Pedro's observation that "the sample rate it's ok but I haven't sound" was the diagnostic clue: the radio accepted the rate-set command (spectrum rendered wider) but downstream audio could not keep up. The most likely explanation is that the rate-code lookup table differs between DX and PRO — the `0x32` value that produces 312500 Hz on the DX appears to command a substantially higher rate on the PRO. We don't have a verified wire capture of EESDR3 commanding the PRO at 312500 to ground-truth the correct rate code, so the safe path is to put the PRO back where it was and try again later with capture data in hand.
+
+v2.1.8 restores the SunSDR2 PRO to the v2.1.6 baseline: native 39,062.5 Hz IQ with the 39062.5 → 384 kHz upsample stage feeding WDSP. Panadapter span is back to ~20 kHz around the tuned frequency (narrower than EESDR3 at the higher rates, but RX audio works — which is the priority). Per-band TX power calibration from v2.1.4/v2.1.6, MON-button gate, and all other PRO support remain in place.
+
+**Apologies to PRO testers** for the broken v2.1.7. The fix-in-public model has a real cost when there's no PRO on the development bench to validate against — v2.1.7 shipped with an explicit "best effort" caveat for exactly this reason, but the resulting friction was avoidable. Lifting the PRO rate properly will require a wire capture from a willing tester comparing EESDR3 PRO at 39062.5 vs 312500 vs the higher rates so we can decode the actual rate-code byte the radio expects.
+
+**The cmASIO Setup UX fix and the meter skin-path fix from v2.1.7 are unchanged and remain shipped.** Those were independent of the PRO rate change and are working as intended.
+
+### What was new in v2.1.7
 
 Three independent fixes bundled. Two of them (PRO native rate, meter skin path) touch PRO-side behaviour we couldn't fully validate locally because there's no SunSDR2 PRO on the development bench. **PRO users — please install, test, and report back on issue #46 (sample rate) and issue #45 (meters) if anything misbehaves.** Reverts are a single commit each; nothing in this release is irreversible.
 
